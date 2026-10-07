@@ -1,1074 +1,1879 @@
-diff --git a/src/api/agents.ts b/src/api/agents.ts
-index db4c9ae..30e604d 100644
---- a/src/api/agents.ts
-+++ b/src/api/agents.ts
-@@ -1,6 +1,7 @@
- 
- import { authTokenStore } from "./authTokenStore";
- import { serviceUrl } from "../config/api";
-+import { handleUnauthorized } from "./sessionGuard";
- import type {
-   AgentDto,
-   AgentEditorOptionsDto,
-@@ -48,6 +49,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-     },
-   });
-   const data = await parseBody(r);
-+  if (r.status === 401) handleUnauthorized(token);
-   if (!r.ok) throw new Error(messageOf(r.status, data));
-   if (r.status === 204) return undefined as T;
-   return data as T;
-diff --git a/src/components/agents/AgentStudioView.tsx b/src/components/agents/AgentStudioView.tsx
-index 78fdf99..5d327ec 100644
---- a/src/components/agents/AgentStudioView.tsx
-+++ b/src/components/agents/AgentStudioView.tsx
-@@ -1,5 +1,5 @@
- 
--import React, { useEffect, useMemo, useState } from "react";
-+import React, { useEffect, useMemo, useRef, useState } from "react";
- import {
-   AlertCircle,
-   Bot,
-@@ -14,13 +14,20 @@ import {
- } from "lucide-react";
- import { usePlatform } from "../../context/PlatformContext";
- import { PERMISSIONS } from "../../config/permissions";
--import { agentsApi } from "../../api/agents";
- import { groupName, userGroupEntries } from "../../api/groupDirectory";
- import {
--  normalizeAgent,
--  normalizeEditorOptions,
-+  agentErrorMessage,
-+  useCreateAgentMutation,
-+  useDeleteAgentMutation,
-+  useGetAgentsQuery,
-+  useGetEditorOptionsQuery,
-+  useLazyGetAgentQuery,
-+  usePatchAgentMutation,
-+  usePublishAgentMutation,
-+  useUnpublishAgentMutation,
-+} from "../../store/agentApi";
-+import {
-   toCreatePayload,
--  type AgentEditorOptionsDto,
-   type AgentKnowledgeBaseRef,
-   type AgentToolRef,
-   type AgentUi,
-@@ -28,6 +35,8 @@ import {
- } from "../../types/agent";
- import { Modal } from "../../rag/Overlays";
- 
-+const AGENT_PAGE_SIZE = 25;
-+
- const emptyForm = {
-   name: "",
-   description: "",
-@@ -55,12 +64,25 @@ const labelClass = "block text-[11px] font-semibold text-slate-400 mb-1.5";
- 
- export const AgentStudioView: React.FC = () => {
-   const {
--    agents,
-     currentUser,
-     hasPermission,
--    reloadPlatformData,
-     showNotification,
-   } = usePlatform();
-+  const [agentPage, setAgentPage] = useState(1);
-+  const agentListQuery = useGetAgentsQuery({
-+    page: agentPage,
-+    pageSize: AGENT_PAGE_SIZE,
-+  });
-+  const agents = agentListQuery.currentData?.items ?? [];
-+  const totalAgents = agentListQuery.data?.totalCount ?? 0;
-+  const totalPages = Math.max(1, Math.ceil(totalAgents / AGENT_PAGE_SIZE));
-+  const [loadAgent, { isFetching: agentDetailLoading }] =
-+    useLazyGetAgentQuery();
-+  const [createAgentMutation] = useCreateAgentMutation();
-+  const [patchAgentMutation] = usePatchAgentMutation();
-+  const [deleteAgentMutation] = useDeleteAgentMutation();
-+  const [publishAgentMutation] = usePublishAgentMutation();
-+  const [unpublishAgentMutation] = useUnpublishAgentMutation();
- 
-   const canCreate = hasPermission(PERMISSIONS.Agent.Create);
-   const canEdit = hasPermission(PERMISSIONS.Agent.Edit);
-@@ -83,15 +105,24 @@ export const AgentStudioView: React.FC = () => {
- 
-   const [loading, setLoading] = useState(false);
-   const [error, setError] = useState("");
--  const [options, setOptions] = useState<AgentEditorOptionsDto | null>(null);
-   const [selectedId, setSelectedId] = useState<string | null>(null);
-   const [detail, setDetail] = useState<AgentUi | null>(null);
-   const [mode, setMode] = useState<"create" | "edit">("create");
-   const [form, setForm] = useState<FormState>(emptyForm);
-   const [formTab, setFormTab] = useState<FormTabKey>("access");
-   const [modalOpen, setModalOpen] = useState(false);
-+  const selectedRequestId = useRef<string | null>(null);
-+  const shouldFetchEditorOptions =
-+    modalOpen && (mode === "create" || detail !== null);
-+  const editorOptionsQuery = useGetEditorOptionsQuery(
-+    { groupIds: form.groupIds },
-+    { skip: !shouldFetchEditorOptions },
-+  );
-+  const options = editorOptionsQuery.currentData ?? null;
- 
-   const readOnly = mode === "edit" && !canEdit;
-+  const actionLoading =
-+    loading || agentDetailLoading || editorOptionsQuery.isFetching;
- 
-   /* Groups offered on the Access tab: mine, plus any group already on the
-      agent being edited (so an existing grant is shown, never silently
-@@ -133,58 +164,30 @@ export const AgentStudioView: React.FC = () => {
-     [options],
-   );
- 
--  const loadOptions = async (groupIds: string[]) => {
--    try {
--      const next = normalizeEditorOptions(
--        await agentsApi.getEditorOptions(groupIds),
--      );
--
--      setOptions(next);
--
--      setForm((current) => {
--        const modelIds = new Set((next.models ?? []).map((m) => m.id));
--
--        const kbIds = new Set((next.knowledgeBases ?? []).map((k) => k.id));
--
--        const toolIds = new Set((next.tools ?? []).map((t) => t.id));
-+  useEffect(() => {
-+    if (!options) return;
- 
--        return {
--          ...current,
--          modelId: modelIds.has(current.modelId) ? current.modelId : "",
--          knowledgeBases: current.knowledgeBases.filter((k) =>
--            kbIds.has(k.knowledgeBaseId),
--          ),
--          tools: current.tools.filter((t) => toolIds.has(t.toolId)),
--        };
--      });
--    } catch (e) {
--      setError(
--        e instanceof Error
--          ? e.message
--          : "Failed to load editor options (models / KBs / tools).",
-+    setForm((current) => {
-+      const modelIds = new Set(options.models.map((model) => model.id));
-+      const knowledgeBaseIds = new Set(
-+        options.knowledgeBases.map((knowledgeBase) => knowledgeBase.id),
-       );
--    }
--  };
-+      const toolIds = new Set(options.tools.map((tool) => tool.id));
- 
--  /*
--   * The sorted group selection is used as the dependency key.
--   * This means:
--   *
--   * [A, B] === [B, A]
--   *
--   * from the API-fetch perspective, so changing checkbox order does not
--   * trigger an unnecessary reload.
--   */
--  const groupKey = form.groupIds.slice().sort().join(",");
-+      return {
-+        ...current,
-+        modelId: modelIds.has(current.modelId) ? current.modelId : "",
-+        knowledgeBases: current.knowledgeBases.filter((knowledgeBase) =>
-+          knowledgeBaseIds.has(knowledgeBase.knowledgeBaseId),
-+        ),
-+        tools: current.tools.filter((tool) => toolIds.has(tool.toolId)),
-+      };
-+    });
-+  }, [options]);
- 
-   useEffect(() => {
--    if (!modalOpen) return;
--
--    void loadOptions(form.groupIds);
--
--    // groupKey is the sorted selection, so order of clicks does not refetch.
--    // eslint-disable-next-line react-hooks/exhaustive-deps
--  }, [groupKey]);
-+    if (agentPage > totalPages) setAgentPage(totalPages);
-+  }, [agentPage, totalPages]);
- 
-   /*
-    * One group available: pre-select it when creating.
-@@ -203,9 +206,11 @@ export const AgentStudioView: React.FC = () => {
-     setError("");
- 
-     try {
--      await Promise.all([reloadPlatformData(), loadOptions(form.groupIds)]);
-+      await agentListQuery.refetch().unwrap();
-+      if (shouldFetchEditorOptions)
-+        await editorOptionsQuery.refetch().unwrap();
-     } catch (e) {
--      setError(e instanceof Error ? e.message : "Failed to load agents.");
-+      setError(agentErrorMessage(e, "Failed to refresh agent data."));
-     } finally {
-       setLoading(false);
-     }
-@@ -214,6 +219,7 @@ export const AgentStudioView: React.FC = () => {
-   const openCreate = () => {
-     const initialGroups = myGroups[0]?.id ? [myGroups[0].id] : [];
- 
-+    selectedRequestId.current = null;
-     setMode("create");
-     setSelectedId(null);
-     setDetail(null);
-@@ -229,16 +235,18 @@ export const AgentStudioView: React.FC = () => {
-   };
- 
-   const openEdit = async (id: string) => {
-+    selectedRequestId.current = id;
-     setError("");
-     setFormTab("basics");
-     setModalOpen(true);
-     setMode("edit");
-     setSelectedId(id);
--    setLoading(true);
-+    setDetail(null);
-+    setForm(emptyForm);
- 
-     try {
--      const dto = await agentsApi.getAgent(id);
--      const agent = normalizeAgent(dto);
-+      const agent = await loadAgent(id, true).unwrap();
-+      if (selectedRequestId.current !== id) return;
- 
-       setDetail(agent);
- 
-@@ -257,13 +265,13 @@ export const AgentStudioView: React.FC = () => {
-         memoryInstructions: agent.memoryInstructions,
-       });
-     } catch (e) {
--      setError(e instanceof Error ? e.message : "Failed to load agent.");
--    } finally {
--      setLoading(false);
-+      if (selectedRequestId.current === id)
-+        setError(agentErrorMessage(e, "Failed to load agent."));
-     }
-   };
- 
-   const closeModal = () => {
-+    selectedRequestId.current = null;
-     setModalOpen(false);
-     setError("");
-   };
-@@ -409,22 +417,23 @@ export const AgentStudioView: React.FC = () => {
- 
-     try {
-       if (mode === "create") {
--        const created = await agentsApi.createAgent(payload());
-+        const created = await createAgentMutation(payload()).unwrap();
- 
-         showNotification?.(`Created ${created.name}`);
- 
--        await reloadPlatformData();
-         await openEdit(created.id);
-       } else if (selectedId) {
--        const updated = await agentsApi.patchAgent(selectedId, payload());
-+        const updated = await patchAgentMutation({
-+          id: selectedId,
-+          data: payload(),
-+        }).unwrap();
- 
-         showNotification?.(`Saved ${updated.name}`);
- 
--        setDetail(normalizeAgent(updated));
--        await reloadPlatformData();
-+        setDetail(updated);
-       }
-     } catch (err) {
--      setError(err instanceof Error ? err.message : "Save failed.");
-+      setError(agentErrorMessage(err, "Save failed."));
-     } finally {
-       setLoading(false);
-     }
-@@ -439,15 +448,14 @@ export const AgentStudioView: React.FC = () => {
-     setError("");
- 
-     try {
--      await agentsApi.deleteAgent(selectedId);
-+      await deleteAgentMutation(selectedId).unwrap();
- 
-       showNotification?.("Agent deleted.");
- 
-       closeModal();
- 
--      await reloadPlatformData();
-     } catch (err) {
--      setError(err instanceof Error ? err.message : "Delete failed.");
-+      setError(agentErrorMessage(err, "Delete failed."));
-     } finally {
-       setLoading(false);
-     }
-@@ -460,15 +468,12 @@ export const AgentStudioView: React.FC = () => {
-     setError("");
- 
-     try {
--      const dto = publish
--        ? await agentsApi.publishAgent(selectedId)
--        : await agentsApi.unpublishAgent(selectedId);
--
--      setDetail(normalizeAgent(dto));
--
--      await reloadPlatformData();
-+      const updated = publish
-+        ? await publishAgentMutation(selectedId).unwrap()
-+        : await unpublishAgentMutation(selectedId).unwrap();
-+      setDetail(updated);
-     } catch (err) {
--      setError(err instanceof Error ? err.message : "Publish failed.");
-+      setError(agentErrorMessage(err, "Publish failed."));
-     } finally {
-       setLoading(false);
-     }
-@@ -530,11 +535,11 @@ export const AgentStudioView: React.FC = () => {
-           <button
-             type="button"
-             onClick={refresh}
--            disabled={loading}
-+            disabled={loading || agentListQuery.isFetching}
-             className="px-3 py-2 rounded bg-slate-800 text-slate-200 text-xs"
-           >
-             <RefreshCw
--              className={`w-4 h-4 inline mr-1 ${loading ? "animate-spin" : ""}`}
-+              className={`w-4 h-4 inline mr-1 ${loading || agentListQuery.isFetching ? "animate-spin" : ""}`}
-             />
-             Refresh
-           </button>
-@@ -553,11 +558,23 @@ export const AgentStudioView: React.FC = () => {
-         )}
- 
-       <div className="space-y-3">
--        {agents.length === 0 && (
-+        {agentListQuery.isError && (
-+          <div className="p-3 rounded-lg border border-rose-500/40 bg-rose-500/10 text-xs text-rose-200">
-+            {agentErrorMessage(agentListQuery.error, "Failed to load agents.")}
-+          </div>
-+        )}
-+        {agentListQuery.isFetching && agents.length === 0 && (
-           <div className="p-8 rounded-xl border border-dashed border-slate-800 text-center text-xs text-slate-500">
--            No agents visible to your groups.
-+            Loading agents…
-           </div>
-         )}
-+        {!agentListQuery.isFetching &&
-+          !agentListQuery.isError &&
-+          agents.length === 0 && (
-+          <div className="p-8 rounded-xl border border-dashed border-slate-800 text-center text-xs text-slate-500">
-+            No agents visible to your groups.
-+          </div>
-+          )}
- 
-         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-           {agents.map((agent) => (
-@@ -587,6 +604,38 @@ export const AgentStudioView: React.FC = () => {
-             </button>
-           ))}
-         </div>
-+        {totalAgents > 0 && (
-+          <div className="flex items-center justify-between gap-3 text-xs text-slate-400">
-+            <span>
-+              Showing {(agentPage - 1) * AGENT_PAGE_SIZE + 1}–
-+              {Math.min(agentPage * AGENT_PAGE_SIZE, totalAgents)} of{" "}
-+              {totalAgents}
-+            </span>
-+            <div className="flex gap-2">
-+              <button
-+                type="button"
-+                disabled={agentPage <= 1 || agentListQuery.isFetching}
-+                onClick={() => setAgentPage((page) => Math.max(1, page - 1))}
-+                className="px-3 py-1.5 rounded bg-slate-800 text-slate-200 disabled:opacity-40"
-+              >
-+                Previous
-+              </button>
-+              <span className="py-1.5">
-+                Page {agentPage} of {totalPages}
-+              </span>
-+              <button
-+                type="button"
-+                disabled={agentPage >= totalPages || agentListQuery.isFetching}
-+                onClick={() =>
-+                  setAgentPage((page) => Math.min(totalPages, page + 1))
-+                }
-+                className="px-3 py-1.5 rounded bg-slate-800 text-slate-200 disabled:opacity-40"
-+              >
-+                Next
-+              </button>
-+            </div>
-+          </div>
-+        )}
-       </div>
- 
-       <Modal
-@@ -620,7 +669,7 @@ export const AgentStudioView: React.FC = () => {
-               {mode === "edit" && canDelete && (
-                 <button
-                   type="button"
--                  disabled={loading}
-+                  disabled={actionLoading}
-                   onClick={() => void remove()}
-                   className="px-3.5 py-2 rounded-lg bg-rose-800 hover:bg-rose-700 text-white text-xs transition-colors"
-                 >
-@@ -634,7 +683,7 @@ export const AgentStudioView: React.FC = () => {
-                 detail?.status === "Published" && (
-                   <button
-                     type="button"
--                    disabled={loading}
-+                    disabled={actionLoading}
-                     onClick={() => void publish(false)}
-                     className="px-3.5 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs transition-colors"
-                   >
-@@ -648,7 +697,7 @@ export const AgentStudioView: React.FC = () => {
-                 detail?.status !== "Published" && (
-                   <button
-                     type="button"
--                    disabled={loading}
-+                    disabled={actionLoading}
-                     onClick={() => void publish(true)}
-                     className="px-3.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs transition-colors"
-                   >
-@@ -661,7 +710,7 @@ export const AgentStudioView: React.FC = () => {
-                 <button
-                   type="submit"
-                   form="agent-studio-form"
--                  disabled={loading}
-+                  disabled={actionLoading}
-                   className="px-3.5 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold transition-colors"
-                 >
-                   <Save className="w-3.5 h-3.5 inline mr-1" />
-@@ -673,7 +722,11 @@ export const AgentStudioView: React.FC = () => {
-           )
-         }
-       >
--        {!canCreate && mode === "create" ? (
-+        {mode === "edit" && agentDetailLoading ? (
-+          <div className="py-8 text-center text-xs text-slate-400">
-+            Loading agent configuration…
-+          </div>
-+        ) : !canCreate && mode === "create" ? (
-           <div className="text-xs text-slate-500">
-             <Lock className="w-4 h-4 inline mr-1" />
-             You have view access only. Open an existing agent to inspect it.
-@@ -698,10 +751,14 @@ export const AgentStudioView: React.FC = () => {
-               ))}
-             </div>
- 
--            {error && (
-+            {(error || editorOptionsQuery.error) && (
-               <div className="p-3 rounded-lg border border-rose-500/40 bg-rose-500/10 text-xs text-rose-200">
-                 <AlertCircle className="w-4 h-4 inline mr-1" />
--                {error}
-+                {error ||
-+                  agentErrorMessage(
-+                    editorOptionsQuery.error,
-+                    "Failed to load editor options.",
-+                  )}
-               </div>
-             )}
- 
-diff --git a/src/components/audit/AuditLogsView.tsx b/src/components/audit/AuditLogsView.tsx
-index 1809b2c..abbee2c 100644
---- a/src/components/audit/AuditLogsView.tsx
-+++ b/src/components/audit/AuditLogsView.tsx
-@@ -144,8 +144,10 @@ import {
-   AuditRunDetail,
-   AuditRunItem,
- } from "../../api/execution";
-+import { useGetAgentsQuery } from "../../store/agentApi";
- import { DataTable, Drawer, Panel } from "../../rag/Overlays";
- import { BTN, HELP, INPUT, Pill } from "../../rag/RagUI";
-+import { PERMISSIONS } from "../../config/permissions";
- 
- const PAGE = 25;
- const tone = (s: string) =>
-@@ -191,7 +193,17 @@ const Pre: React.FC<{ text?: string | null; tone?: string }> = ({
- );
- 
- export const AuditLogsView: React.FC = () => {
--  const { agents, theme } = usePlatform();
-+  const { theme, hasPermission } = usePlatform();
-+  const canViewAgents = hasPermission(PERMISSIONS.Agent.View);
-+  const {
-+    currentData: agentResult,
-+    isLoading: agentsLoading,
-+    isError: agentsError,
-+  } = useGetAgentsQuery(
-+    { page: 1, pageSize: 200 },
-+    { skip: !canViewAgents },
-+  );
-+  const agents = agentResult?.items ?? [];
-   const [agentId, setAgentId] = useState("");
-   const [f, setF] = useState({
-     status: "",
-@@ -288,7 +300,17 @@ export const AuditLogsView: React.FC = () => {
-               setPage(0);
-             }}
-           >
--            {!agents.length && <option value="">No agents available</option>}
-+            {!agents.length && (
-+              <option value="">
-+                {agentsLoading
-+                  ? "Loading agents…"
-+                  : agentsError
-+                    ? "Could not load agents"
-+                    : !canViewAgents
-+                      ? "Agent view permission required"
-+                    : "No agents available"}
-+              </option>
-+            )}
-             {agents.map((a) => (
-               <option key={a.id} value={a.id}>
-                 {a.name}
-diff --git a/src/components/audit/ExecutionActivity.tsx b/src/components/audit/ExecutionActivity.tsx
-index 150376c..0879f75 100644
---- a/src/components/audit/ExecutionActivity.tsx
-+++ b/src/components/audit/ExecutionActivity.tsx
-@@ -1,22 +1,38 @@
- 
--import React, { useEffect, useState } from "react";
-+import React, { useEffect, useMemo, useState } from "react";
- import { Activity } from "lucide-react";
- import { usePlatform } from "../../context/PlatformContext";
- import { ActivityRun, executionApi } from "../../api/execution";
-+import { PERMISSIONS } from "../../config/permissions";
-+import { useGetAgentsQuery } from "../../store/agentApi";
- 
- export const ExecutionActivity: React.FC = () => {
--  const { agents, theme } = usePlatform();
-+  const { theme, hasPermission } = usePlatform();
-+  const canViewAgents = hasPermission(PERMISSIONS.Agent.View);
-+  const {
-+    currentData: agentResult,
-+    isLoading: agentsLoading,
-+    isError: agentsError,
-+  } = useGetAgentsQuery(
-+    { page: 1, pageSize: 200 },
-+    { skip: !canViewAgents },
-+  );
-+  const agents = agentResult?.items ?? [];
-+  const agentReferences = useMemo(
-+    () => agents.map((agent) => ({ id: agent.id, name: agent.name })),
-+    [agents],
-+  );
-   const [rows, setRows] = useState<ActivityRun[]>([]);
-   const [error, setError] = useState("");
-   const [selected, setSelected] = useState<ActivityRun | null>(null);
- 
-   useEffect(() => {
-     let stop = false;
-+    if (!canViewAgents || agentsLoading) return;
-+
-     const load = async () => {
-       try {
--        const next = await executionApi.loadActivity(
--          agents.map((agent) => ({ id: agent.id, name: agent.name })),
--        );
-+        const next = await executionApi.loadActivity(agentReferences);
-         if (!stop) {
-           setRows(next);
-           setError("");
-@@ -38,7 +54,7 @@ export const ExecutionActivity: React.FC = () => {
-       stop = true;
-       if (timer) clearTimeout(timer);
-     };
--  }, [agents]);
-+  }, [agentReferences, agentsLoading, canViewAgents]);
- 
-   const light = theme === "light";
- 
-@@ -51,6 +67,9 @@ export const ExecutionActivity: React.FC = () => {
-       >
-         <Activity className="w-4 h-4 text-cyan-400" /> Agent executions
-       </h3>
-+      {agentsError && (
-+        <p className="text-xs text-amber-400">Could not load the agent list.</p>
-+      )}
-       {error && <p className="text-xs text-amber-400">{error}</p>}
-       <div className="overflow-x-auto max-h-80">
-         <table className="w-full text-xs">
-diff --git a/src/components/layout/Sidebar.tsx b/src/components/layout/Sidebar.tsx
-index 4356097..e28523b 100644
---- a/src/components/layout/Sidebar.tsx
-+++ b/src/components/layout/Sidebar.tsx
-@@ -19,6 +19,7 @@ import { usePlatform } from '../../context/PlatformContext';
- import { RolePermissionKey } from '../../types';
- import { PERMISSIONS } from '../../config/permissions';
- import DarkLogo from "../../assets/images/ccilLogo-dark.png";
-+import { useGetAgentsQuery } from '../../store/agentApi';
- export const Sidebar: React.FC = () => {
-   const {
-      theme,
-@@ -27,13 +28,18 @@ export const Sidebar: React.FC = () => {
-   setActiveView,
-   pendingRegistrations,
-   localTools,
--  agents,
-   knowledgeBases,
-   hasPermission,
-   currentRole,
-   currentUser,
-   canAccessView,   // <-- this was missing, causing the ReferenceError / blank screen
- } = usePlatform();
-+  const canViewAgents = hasPermission(PERMISSIONS.Agent.View);
-+  const { data: agentSummary } = useGetAgentsQuery(
-+    { page: 1, pageSize: 1 },
-+    { skip: !canViewAgents },
-+  );
-+  const agentCount = agentSummary?.totalCount ?? 0;
- 
-   const pendingToolsCount = localTools.filter((t) => String(t.status || '').toLowerCase() === 'pendingapproval').length;
- 
-@@ -109,7 +115,7 @@ export const Sidebar: React.FC = () => {
-           label: 'Agent Studio',
-           icon: Bot,
-           permission: PERMISSIONS.Agent.View,
--          badge: agents.length,
-+          badge: agentCount,
-           badgeColor: 'bg-purple-500/20 text-purple-300',
-         },
-         {
-diff --git a/src/components/playground/PlaygroundView.tsx b/src/components/playground/PlaygroundView.tsx
-index 54c6b3c..b068984 100644
---- a/src/components/playground/PlaygroundView.tsx
-+++ b/src/components/playground/PlaygroundView.tsx
-@@ -1,14 +1,24 @@
- 
--import React, { useState } from "react";
-+import React, { useEffect, useState } from "react";
- import { AlertTriangle, Bot } from "lucide-react";
--import { usePlatform } from "../../context/PlatformContext";
- import { executionApi } from "../../api/execution";
-+import { useGetAgentsQuery } from "../../store/agentApi";
- 
- export const PlaygroundView: React.FC = () => {
--  const { agents, selectedPlaygroundAgentId, setSelectedPlaygroundAgentId } =
--    usePlatform();
-+  const {
-+    currentData: agentResult,
-+    isLoading: agentsLoading,
-+    isError: agentsError,
-+  } = useGetAgentsQuery({ page: 1, pageSize: 200 });
-+  const agents = agentResult?.items ?? [];
-+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-+  useEffect(() => {
-+    if (!agents.some((agent) => agent.id === selectedAgentId)) {
-+      setSelectedAgentId(agents[0]?.id ?? null);
-+    }
-+  }, [agents, selectedAgentId]);
-   const active =
--    agents.find((a) => a.id === selectedPlaygroundAgentId) || agents[0];
-+    agents.find((agent) => agent.id === selectedAgentId) || agents[0];
-   const [message, setMessage] = useState("");
-   const [threadId, setThreadId] = useState("");
-   const [busy, setBusy] = useState(false);
-@@ -63,13 +73,19 @@ export const PlaygroundView: React.FC = () => {
-         <select
-           value={active?.id || ""}
-           onChange={(e) => {
--            setSelectedPlaygroundAgentId(e.target.value || null);
-+            setSelectedAgentId(e.target.value || null);
-             setThreadId("");
-             setTurns([]);
-           }}
-           className="w-full bg-slate-800 rounded-lg p-2 text-xs text-white"
-         >
--          {agents.length === 0 && (
-+          {agentsLoading && agents.length === 0 && (
-+            <option value="">Loading agents…</option>
-+          )}
-+          {agentsError && agents.length === 0 && (
-+            <option value="">Could not load agents</option>
-+          )}
-+          {!agentsLoading && !agentsError && agents.length === 0 && (
-             <option value="">No agents returned by backend</option>
-           )}
-           {agents.map((a) => (
-@@ -85,6 +101,12 @@ export const PlaygroundView: React.FC = () => {
-         )}
-       </div>
- 
-+      {agentsError && (
-+        <div className="p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-xs text-amber-200">
-+          Could not load the agent list. Try refreshing the page.
-+        </div>
-+      )}
-+
-       <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3 min-h-40">
-         {turns.length === 0 && (
-           <p className="text-xs text-slate-500">No test messages yet.</p>
-diff --git a/src/context/PlatformContext.tsx b/src/context/PlatformContext.tsx
-index 28fff13..6df1d29 100644
---- a/src/context/PlatformContext.tsx
-+++ b/src/context/PlatformContext.tsx
-@@ -18,7 +18,6 @@ import { roleProfilesApi, roleAttributesApi } from "../api/roleApi";
- import { usersApi } from "../api/usersApi";
- import { localToolsApi } from "../api/localToolsApi";
- import { remoteToolsApi } from "../api/remoteToolsApi";
--import { agentsApi } from "../api/agents";
- import { decodeJwtPayload, isJwtExpired } from "../api/jwt";
- import {
-   forget as forgetGroupNames,
-@@ -52,12 +51,6 @@ import type {
-   LocalToolListItemDto,
-   RemoteToolListItemDto,
- } from "../types/tools";
--import {
--  normalizeAgent,
--  type AgentUi,
--  type CreateAgentRequest,
--  type PatchAgentRequest,
--} from "../types/agent";
- import { useSessionRefresh } from "../hooks/useSessionRefresh";
- 
- export interface PlatformContextType {
-@@ -117,19 +110,11 @@ export interface PlatformContextType {
-   gateways: AiGatewayDto[];
-   models: ModelRegistryDto[];
-   knowledgeBases: any[];
--  agents: AgentUi[];
-   strategies: any[];
-   ingestedDocs: any[];
-   auditLogs: any[];
- 
-   reloadPlatformData: (view?: string) => Promise<void>;
--  addAgent: (data: CreateAgentRequest) => Promise<void>;
--  updateAgent: (id: string, data: PatchAgentRequest) => Promise<void>;
--  deleteAgent: (agentId: string) => Promise<void>;
--  publishAgent: (agentId: string) => Promise<void>;
--  unpublishAgent: (agentId: string) => Promise<void>;
--  selectedPlaygroundAgentId: string | null;
--  setSelectedPlaygroundAgentId: (id: string | null) => void;
- 
-   activeView: string;
-   setActiveView: (view: string) => void;
-@@ -261,12 +246,8 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
-   const [knowledgeBases, setKnowledgeBases] = useState<any[]>([]);
-   const [strategies, setStrategies] = useState<any[]>([]);
-   const [ingestedDocs, setIngestedDocs] = useState<any[]>([]);
--  const [agents, setAgents] = useState<AgentUi[]>([]);
-   const [auditLogs, setAuditLogs] = useState<any[]>([]);
- 
--  const [selectedPlaygroundAgentId, setSelectedPlaygroundAgentId] = useState<
--    string | null
--  >(null);
-   const [activeViewState, setActiveViewState] = useState("tools");
-   const [notification, setNotification] = useState<string | null>(null);
-   const [theme, setThemeState] = useState<"light" | "dark" | "enterprise">(
-@@ -461,21 +442,6 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
-             })(),
-           );
-         }
--      } else if (
--        view === "agents" ||
--        view === "playground" ||
--        view === "audit"
--      ) {
--        if (hasPermission(PERMISSIONS.Agent.View)) {
--          tasks.push(
--            (async () => {
--              const result = await agentsApi.getAgents(1, 200);
--              setAgents(
--                (result?.items ?? []).map(normalizeAgent).filter((a) => a.id),
--              );
--            })(),
--          );
--        }
-       }
- 
-       await Promise.allSettled(tasks);
-@@ -519,7 +485,6 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
-       setModels([]);
-       setKnowledgeBases([]);
-       setStrategies([]);
--      setAgents([]);
-       setActiveViewState("tools");
-       try {
-         const response: LoginResponse = await authApi.login(username, password);
-@@ -599,7 +564,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
-         setAuthLoading(false);
-       }
-     },
--    [showNotification],
-+    [dispatch, showNotification],
-   );
- 
-   const logout = useCallback(() => {
-@@ -616,7 +581,6 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
-     setModels([]);
-     setKnowledgeBases([]);
-     setStrategies([]);
--    setAgents([]);
-     void authApi.logout(token);
-     showNotification("Logged out.");
-   }, [accessToken, dispatch, showNotification]);
-@@ -677,34 +641,6 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
-     await refetchUsers();
-   };
- 
--  const addAgent = async (data: CreateAgentRequest) => {
--    await agentsApi.createAgent(data);
--    showNotification("Agent created.");
--    const result = await agentsApi.getAgents(1, 200);
--    setAgents((result?.items ?? []).map(normalizeAgent).filter((a) => a.id));
--  };
--  const updateAgent = async (id: string, data: PatchAgentRequest) => {
--    await agentsApi.patchAgent(id, data);
--    showNotification("Agent saved.");
--    const result = await agentsApi.getAgents(1, 200);
--    setAgents((result?.items ?? []).map(normalizeAgent).filter((a) => a.id));
--  };
--  const deleteAgent = async (agentId: string) => {
--    await agentsApi.deleteAgent(agentId);
--    showNotification("Agent deleted.");
--    setAgents((prev) => prev.filter((a) => a.id !== agentId));
--  };
--
--  const publishAgent = async (agentId: string) => {
--    await agentsApi.publishAgent(agentId);
--    const result = await agentsApi.getAgents(1, 200);
--    setAgents((result?.items ?? []).map(normalizeAgent).filter((a) => a.id));
--  };
--  const unpublishAgent = async (agentId: string) => {
--    await agentsApi.unpublishAgent(agentId);
--    const result = await agentsApi.getAgents(1, 200);
--    setAgents((result?.items ?? []).map(normalizeAgent).filter((a) => a.id));
--  };
-   const setTheme = (theme: "light" | "dark" | "enterprise") => {
-     setThemeState(theme);
-     localStorage.setItem("ai_platform_theme", theme);
-@@ -751,18 +687,10 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
-     gateways,
-     models,
-     knowledgeBases,
--    agents,
-     strategies,
-     ingestedDocs,
-     auditLogs,
-     reloadPlatformData,
--    addAgent,
--    updateAgent,
--    deleteAgent,
--    publishAgent,
--    unpublishAgent,
--    selectedPlaygroundAgentId,
--    setSelectedPlaygroundAgentId,
-     activeView: activeViewState,
-     setActiveView,
-     notification,
-diff --git a/src/store/agentApi.ts b/src/store/agentApi.ts
-new file mode 100644
-index 0000000..9b146dc
---- /dev/null
-+++ b/src/store/agentApi.ts
-@@ -0,0 +1,161 @@
-+import { createApi, fakeBaseQuery } from "@reduxjs/toolkit/query/react";
-+import { agentsApi } from "../api/agents";
-+import {
-+  normalizeAgent,
-+  normalizeEditorOptions,
-+  type AgentEditorOptionsDto,
-+  type AgentListItemDto,
-+  type AgentUi,
-+  type CreateAgentRequest,
-+  type PagedResult,
-+  type PatchAgentRequest,
-+} from "../types/agent";
-+
-+export interface AgentListQuery {
-+  page?: number;
-+  pageSize?: number;
-+  search?: string;
-+  status?: string;
-+  groupId?: string;
-+}
-+
-+export interface AgentEditorOptionsQuery {
-+  groupIds: string[];
-+}
-+
-+interface AgentApiError {
-+  status: "CUSTOM_ERROR";
-+  error: string;
-+}
-+
-+async function queryResult<T>(
-+  request: () => Promise<T>,
-+): Promise<{ data: T } | { error: AgentApiError }> {
-+  try {
-+    return { data: await request() };
-+  } catch (error) {
-+    return {
-+      error: {
-+        status: "CUSTOM_ERROR",
-+        error:
-+          error instanceof Error ? error.message : "Agent request failed.",
-+      },
-+    };
-+  }
-+}
-+
-+export function agentErrorMessage(error: unknown, fallback: string): string {
-+  if (!error || typeof error !== "object") return fallback;
-+  if ("error" in error && typeof error.error === "string") return error.error;
-+  if ("message" in error && typeof error.message === "string")
-+    return error.message;
-+  return fallback;
-+}
-+
-+export const agentApi = createApi({
-+  reducerPath: "agentApi",
-+  baseQuery: fakeBaseQuery<AgentApiError>(),
-+  tagTypes: ["Agent"],
-+  endpoints: (build) => ({
-+    getAgents: build.query<
-+      PagedResult<AgentListItemDto>,
-+      AgentListQuery
-+    >({
-+      queryFn: (query) => {
-+        return queryResult(() =>
-+          agentsApi.getAgents(
-+            query.page ?? 1,
-+            query.pageSize ?? 25,
-+            query.search,
-+            query.status,
-+            query.groupId,
-+          ),
-+        );
-+      },
-+      providesTags: (result) => [
-+        { type: "Agent", id: "LIST" },
-+        ...(result?.items.map(({ id }) => ({ type: "Agent" as const, id })) ??
-+          []),
-+      ],
-+    }),
-+    getAgent: build.query<AgentUi, string>({
-+      queryFn: (id) =>
-+        queryResult(async () => normalizeAgent(await agentsApi.getAgent(id))),
-+      providesTags: (_result, _error, id) => [{ type: "Agent", id }],
-+    }),
-+    getEditorOptions: build.query<
-+      AgentEditorOptionsDto,
-+      AgentEditorOptionsQuery
-+    >({
-+      serializeQueryArgs: ({ queryArgs }) =>
-+        `editor-options:${[...new Set(queryArgs.groupIds)].sort().join(",")}`,
-+      queryFn: ({ groupIds }) =>
-+        queryResult(async () =>
-+          normalizeEditorOptions(
-+            await agentsApi.getEditorOptions(
-+              [...new Set(groupIds)].filter(Boolean).sort(),
-+            ),
-+          ),
-+        ),
-+    }),
-+    createAgent: build.mutation<AgentUi, CreateAgentRequest>({
-+      queryFn: (request) =>
-+        queryResult(async () =>
-+          normalizeAgent(await agentsApi.createAgent(request)),
-+        ),
-+      invalidatesTags: [{ type: "Agent", id: "LIST" }],
-+    }),
-+    patchAgent: build.mutation<
-+      AgentUi,
-+      { id: string; data: PatchAgentRequest }
-+    >({
-+      queryFn: ({ id, data }) =>
-+        queryResult(async () =>
-+          normalizeAgent(await agentsApi.patchAgent(id, data)),
-+        ),
-+      invalidatesTags: (_result, _error, { id }) => [
-+        { type: "Agent", id },
-+        { type: "Agent", id: "LIST" },
-+      ],
-+    }),
-+    deleteAgent: build.mutation<void, string>({
-+      queryFn: (id) => queryResult(() => agentsApi.deleteAgent(id)),
-+      invalidatesTags: (_result, _error, id) => [
-+        { type: "Agent", id },
-+        { type: "Agent", id: "LIST" },
-+      ],
-+    }),
-+    publishAgent: build.mutation<AgentUi, string>({
-+      queryFn: (id) =>
-+        queryResult(async () =>
-+          normalizeAgent(await agentsApi.publishAgent(id)),
-+        ),
-+      invalidatesTags: (_result, _error, id) => [
-+        { type: "Agent", id },
-+        { type: "Agent", id: "LIST" },
-+      ],
-+    }),
-+    unpublishAgent: build.mutation<AgentUi, string>({
-+      queryFn: (id) =>
-+        queryResult(async () =>
-+          normalizeAgent(await agentsApi.unpublishAgent(id)),
-+        ),
-+      invalidatesTags: (_result, _error, id) => [
-+        { type: "Agent", id },
-+        { type: "Agent", id: "LIST" },
-+      ],
-+    }),
-+  }),
-+});
-+
-+export const {
-+  useGetAgentsQuery,
-+  useGetAgentQuery,
-+  useLazyGetAgentQuery,
-+  useGetEditorOptionsQuery,
-+  useCreateAgentMutation,
-+  usePatchAgentMutation,
-+  useDeleteAgentMutation,
-+  usePublishAgentMutation,
-+  useUnpublishAgentMutation,
-+} = agentApi;
-diff --git a/src/store/index.ts b/src/store/index.ts
-index 30b0c36..111d76a 100644
---- a/src/store/index.ts
-+++ b/src/store/index.ts
-@@ -1,5 +1,6 @@
- 
- import { combineReducers, configureStore } from '@reduxjs/toolkit';
-+import type { Middleware } from '@reduxjs/toolkit';
- import {
-   persistStore,
-   persistReducer,
-@@ -12,9 +13,12 @@ import {
- } from 'redux-persist';
- import storage from 'redux-persist/lib/storage';
- import authReducer from './authSlice';
-+import { logout } from './authSlice';
-+import { agentApi } from './agentApi';
- 
- const rootReducer = combineReducers({
-   auth: authReducer,
-+  [agentApi.reducerPath]: agentApi.reducer,
- });
- 
- const persistConfig = {
-@@ -25,6 +29,12 @@ const persistConfig = {
- 
- const persistedReducer = persistReducer(persistConfig, rootReducer);
- 
-+const resetAgentApiOnLogout: Middleware = ({ dispatch }) => (next) => (action) => {
-+  const result = next(action);
-+  if (logout.match(action)) dispatch(agentApi.util.resetApiState());
-+  return result;
-+};
-+
- export const store = configureStore({
-   reducer: persistedReducer,
-   middleware: (getDefault) =>
-@@ -32,7 +42,7 @@ export const store = configureStore({
-       serializableCheck: {
-         ignoredActions: [FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER],
-       },
--    }),
-+    }).concat(agentApi.middleware as Middleware, resetAgentApiOnLogout),
- });
- 
- export const persistor = persistStore(store);
+AGENT REDUX / RTK QUERY — COPY/PASTE GUIDE
+================================================
+
+All paths are relative to your frontend project root (the folder containing package.json and src/). Follow the sections in order. For each existing file, find the CURRENT SNIPPET and replace that block with the UPDATED SNIPPET. Create the new file at the listed path and paste its full code. If your surrounding code differs, merge these changes into the equivalent location instead of replacing unrelated code.
+
+This guide contains the agent Redux migration only. It does not include logo, favicon, or background styling changes.
+
+
+==============================================================================
+FILE PATH: src/store/agentApi.ts
+==============================================================================
+
+ACTION: Create this new file. Paste the complete code below.
+
+```ts
+import { createApi, fakeBaseQuery } from "@reduxjs/toolkit/query/react";
+import { agentsApi } from "../api/agents";
+import {
+  normalizeAgent,
+  normalizeEditorOptions,
+  type AgentEditorOptionsDto,
+  type AgentListItemDto,
+  type AgentUi,
+  type CreateAgentRequest,
+  type PagedResult,
+  type PatchAgentRequest,
+} from "../types/agent";
+
+export interface AgentListQuery {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  status?: string;
+  groupId?: string;
+}
+
+export interface AgentEditorOptionsQuery {
+  groupIds: string[];
+}
+
+interface AgentApiError {
+  status: "CUSTOM_ERROR";
+  error: string;
+}
+
+async function queryResult<T>(
+  request: () => Promise<T>,
+): Promise<{ data: T } | { error: AgentApiError }> {
+  try {
+    return { data: await request() };
+  } catch (error) {
+    return {
+      error: {
+        status: "CUSTOM_ERROR",
+        error:
+          error instanceof Error ? error.message : "Agent request failed.",
+      },
+    };
+  }
+}
+
+export function agentErrorMessage(error: unknown, fallback: string): string {
+  if (!error || typeof error !== "object") return fallback;
+  if ("error" in error && typeof error.error === "string") return error.error;
+  if ("message" in error && typeof error.message === "string")
+    return error.message;
+  return fallback;
+}
+
+export const agentApi = createApi({
+  reducerPath: "agentApi",
+  baseQuery: fakeBaseQuery<AgentApiError>(),
+  tagTypes: ["Agent"],
+  endpoints: (build) => ({
+    getAgents: build.query<
+      PagedResult<AgentListItemDto>,
+      AgentListQuery
+    >({
+      queryFn: (query) => {
+        return queryResult(() =>
+          agentsApi.getAgents(
+            query.page ?? 1,
+            query.pageSize ?? 25,
+            query.search,
+            query.status,
+            query.groupId,
+          ),
+        );
+      },
+      providesTags: (result) => [
+        { type: "Agent", id: "LIST" },
+        ...(result?.items.map(({ id }) => ({ type: "Agent" as const, id })) ??
+          []),
+      ],
+    }),
+    getAgent: build.query<AgentUi, string>({
+      queryFn: (id) =>
+        queryResult(async () => normalizeAgent(await agentsApi.getAgent(id))),
+      providesTags: (_result, _error, id) => [{ type: "Agent", id }],
+    }),
+    getEditorOptions: build.query<
+      AgentEditorOptionsDto,
+      AgentEditorOptionsQuery
+    >({
+      serializeQueryArgs: ({ queryArgs }) =>
+        `editor-options:${[...new Set(queryArgs.groupIds)].sort().join(",")}`,
+      queryFn: ({ groupIds }) =>
+        queryResult(async () =>
+          normalizeEditorOptions(
+            await agentsApi.getEditorOptions(
+              [...new Set(groupIds)].filter(Boolean).sort(),
+            ),
+          ),
+        ),
+    }),
+    createAgent: build.mutation<AgentUi, CreateAgentRequest>({
+      queryFn: (request) =>
+        queryResult(async () =>
+          normalizeAgent(await agentsApi.createAgent(request)),
+        ),
+      invalidatesTags: [{ type: "Agent", id: "LIST" }],
+    }),
+    patchAgent: build.mutation<
+      AgentUi,
+      { id: string; data: PatchAgentRequest }
+    >({
+      queryFn: ({ id, data }) =>
+        queryResult(async () =>
+          normalizeAgent(await agentsApi.patchAgent(id, data)),
+        ),
+      invalidatesTags: (_result, _error, { id }) => [
+        { type: "Agent", id },
+        { type: "Agent", id: "LIST" },
+      ],
+    }),
+    deleteAgent: build.mutation<void, string>({
+      queryFn: (id) => queryResult(() => agentsApi.deleteAgent(id)),
+      invalidatesTags: (_result, _error, id) => [
+        { type: "Agent", id },
+        { type: "Agent", id: "LIST" },
+      ],
+    }),
+    publishAgent: build.mutation<AgentUi, string>({
+      queryFn: (id) =>
+        queryResult(async () =>
+          normalizeAgent(await agentsApi.publishAgent(id)),
+        ),
+      invalidatesTags: (_result, _error, id) => [
+        { type: "Agent", id },
+        { type: "Agent", id: "LIST" },
+      ],
+    }),
+    unpublishAgent: build.mutation<AgentUi, string>({
+      queryFn: (id) =>
+        queryResult(async () =>
+          normalizeAgent(await agentsApi.unpublishAgent(id)),
+        ),
+      invalidatesTags: (_result, _error, id) => [
+        { type: "Agent", id },
+        { type: "Agent", id: "LIST" },
+      ],
+    }),
+  }),
+});
+
+export const {
+  useGetAgentsQuery,
+  useGetAgentQuery,
+  useLazyGetAgentQuery,
+  useGetEditorOptionsQuery,
+  useCreateAgentMutation,
+  usePatchAgentMutation,
+  useDeleteAgentMutation,
+  usePublishAgentMutation,
+  useUnpublishAgentMutation,
+} = agentApi;
+```
+
+==============================================================================
+FILE PATH: src/store/index.ts
+==============================================================================
+
+CHANGE 1
+CURRENT SNIPPET (find this block):
+```ts
+
+import { combineReducers, configureStore } from '@reduxjs/toolkit';
+import {
+  persistStore,
+  persistReducer,
+```
+
+UPDATED SNIPPET (paste this in its place):
+```ts
+
+import { combineReducers, configureStore } from '@reduxjs/toolkit';
+import type { Middleware } from '@reduxjs/toolkit';
+import {
+  persistStore,
+  persistReducer,
+```
+
+CHANGE 2
+CURRENT SNIPPET (find this block):
+```ts
+} from 'redux-persist';
+import storage from 'redux-persist/lib/storage';
+import authReducer from './authSlice';
+
+const rootReducer = combineReducers({
+  auth: authReducer,
+});
+
+const persistConfig = {
+```
+
+UPDATED SNIPPET (paste this in its place):
+```ts
+} from 'redux-persist';
+import storage from 'redux-persist/lib/storage';
+import authReducer from './authSlice';
+import { logout } from './authSlice';
+import { agentApi } from './agentApi';
+
+const rootReducer = combineReducers({
+  auth: authReducer,
+  [agentApi.reducerPath]: agentApi.reducer,
+});
+
+const persistConfig = {
+```
+
+CHANGE 3
+CURRENT SNIPPET (find this block):
+```ts
+
+const persistedReducer = persistReducer(persistConfig, rootReducer);
+
+export const store = configureStore({
+  reducer: persistedReducer,
+  middleware: (getDefault) =>
+```
+
+UPDATED SNIPPET (paste this in its place):
+```ts
+
+const persistedReducer = persistReducer(persistConfig, rootReducer);
+
+const resetAgentApiOnLogout: Middleware = ({ dispatch }) => (next) => (action) => {
+  const result = next(action);
+  if (logout.match(action)) dispatch(agentApi.util.resetApiState());
+  return result;
+};
+
+export const store = configureStore({
+  reducer: persistedReducer,
+  middleware: (getDefault) =>
+```
+
+CHANGE 4
+CURRENT SNIPPET (find this block):
+```ts
+      serializableCheck: {
+        ignoredActions: [FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER],
+      },
+    }),
+});
+
+export const persistor = persistStore(store);
+```
+
+UPDATED SNIPPET (paste this in its place):
+```ts
+      serializableCheck: {
+        ignoredActions: [FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER],
+      },
+    }).concat(agentApi.middleware as Middleware, resetAgentApiOnLogout),
+});
+
+export const persistor = persistStore(store);
+```
+
+
+==============================================================================
+FILE PATH: src/api/agents.ts
+==============================================================================
+
+CHANGE 1
+CURRENT SNIPPET (find this block):
+```ts
+
+import { authTokenStore } from "./authTokenStore";
+import { serviceUrl } from "../config/api";
+import type {
+  AgentDto,
+  AgentEditorOptionsDto,
+```
+
+UPDATED SNIPPET (paste this in its place):
+```ts
+
+import { authTokenStore } from "./authTokenStore";
+import { serviceUrl } from "../config/api";
+import { handleUnauthorized } from "./sessionGuard";
+import type {
+  AgentDto,
+  AgentEditorOptionsDto,
+```
+
+CHANGE 2
+CURRENT SNIPPET (find this block):
+```ts
+    },
+  });
+  const data = await parseBody(r);
+  if (!r.ok) throw new Error(messageOf(r.status, data));
+  if (r.status === 204) return undefined as T;
+  return data as T;
+```
+
+UPDATED SNIPPET (paste this in its place):
+```ts
+    },
+  });
+  const data = await parseBody(r);
+  if (r.status === 401) handleUnauthorized(token);
+  if (!r.ok) throw new Error(messageOf(r.status, data));
+  if (r.status === 204) return undefined as T;
+  return data as T;
+```
+
+
+==============================================================================
+FILE PATH: src/context/PlatformContext.tsx
+==============================================================================
+
+CHANGE 1
+CURRENT SNIPPET (find this block):
+```tsx
+import { usersApi } from "../api/usersApi";
+import { localToolsApi } from "../api/localToolsApi";
+import { remoteToolsApi } from "../api/remoteToolsApi";
+import { agentsApi } from "../api/agents";
+import { decodeJwtPayload, isJwtExpired } from "../api/jwt";
+import {
+  forget as forgetGroupNames,
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+import { usersApi } from "../api/usersApi";
+import { localToolsApi } from "../api/localToolsApi";
+import { remoteToolsApi } from "../api/remoteToolsApi";
+import { decodeJwtPayload, isJwtExpired } from "../api/jwt";
+import {
+  forget as forgetGroupNames,
+```
+
+CHANGE 2
+CURRENT SNIPPET (find this block):
+```tsx
+  LocalToolListItemDto,
+  RemoteToolListItemDto,
+} from "../types/tools";
+import {
+  normalizeAgent,
+  type AgentUi,
+  type CreateAgentRequest,
+  type PatchAgentRequest,
+} from "../types/agent";
+import { useSessionRefresh } from "../hooks/useSessionRefresh";
+
+export interface PlatformContextType {
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+  LocalToolListItemDto,
+  RemoteToolListItemDto,
+} from "../types/tools";
+import { useSessionRefresh } from "../hooks/useSessionRefresh";
+
+export interface PlatformContextType {
+```
+
+CHANGE 3
+CURRENT SNIPPET (find this block):
+```tsx
+  gateways: AiGatewayDto[];
+  models: ModelRegistryDto[];
+  knowledgeBases: any[];
+  agents: AgentUi[];
+  strategies: any[];
+  ingestedDocs: any[];
+  auditLogs: any[];
+
+  reloadPlatformData: (view?: string) => Promise<void>;
+  addAgent: (data: CreateAgentRequest) => Promise<void>;
+  updateAgent: (id: string, data: PatchAgentRequest) => Promise<void>;
+  deleteAgent: (agentId: string) => Promise<void>;
+  publishAgent: (agentId: string) => Promise<void>;
+  unpublishAgent: (agentId: string) => Promise<void>;
+  selectedPlaygroundAgentId: string | null;
+  setSelectedPlaygroundAgentId: (id: string | null) => void;
+
+  activeView: string;
+  setActiveView: (view: string) => void;
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+  gateways: AiGatewayDto[];
+  models: ModelRegistryDto[];
+  knowledgeBases: any[];
+  strategies: any[];
+  ingestedDocs: any[];
+  auditLogs: any[];
+
+  reloadPlatformData: (view?: string) => Promise<void>;
+
+  activeView: string;
+  setActiveView: (view: string) => void;
+```
+
+CHANGE 4
+CURRENT SNIPPET (find this block):
+```tsx
+  const [knowledgeBases, setKnowledgeBases] = useState<any[]>([]);
+  const [strategies, setStrategies] = useState<any[]>([]);
+  const [ingestedDocs, setIngestedDocs] = useState<any[]>([]);
+  const [agents, setAgents] = useState<AgentUi[]>([]);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+
+  const [selectedPlaygroundAgentId, setSelectedPlaygroundAgentId] = useState<
+    string | null
+  >(null);
+  const [activeViewState, setActiveViewState] = useState("tools");
+  const [notification, setNotification] = useState<string | null>(null);
+  const [theme, setThemeState] = useState<"light" | "dark" | "enterprise">(
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+  const [knowledgeBases, setKnowledgeBases] = useState<any[]>([]);
+  const [strategies, setStrategies] = useState<any[]>([]);
+  const [ingestedDocs, setIngestedDocs] = useState<any[]>([]);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+
+  const [activeViewState, setActiveViewState] = useState("tools");
+  const [notification, setNotification] = useState<string | null>(null);
+  const [theme, setThemeState] = useState<"light" | "dark" | "enterprise">(
+```
+
+CHANGE 5
+CURRENT SNIPPET (find this block):
+```tsx
+            })(),
+          );
+        }
+      } else if (
+        view === "agents" ||
+        view === "playground" ||
+        view === "audit"
+      ) {
+        if (hasPermission(PERMISSIONS.Agent.View)) {
+          tasks.push(
+            (async () => {
+              const result = await agentsApi.getAgents(1, 200);
+              setAgents(
+                (result?.items ?? []).map(normalizeAgent).filter((a) => a.id),
+              );
+            })(),
+          );
+        }
+      }
+
+      await Promise.allSettled(tasks);
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+            })(),
+          );
+        }
+      }
+
+      await Promise.allSettled(tasks);
+```
+
+CHANGE 6
+CURRENT SNIPPET (find this block):
+```tsx
+      setModels([]);
+      setKnowledgeBases([]);
+      setStrategies([]);
+      setAgents([]);
+      setActiveViewState("tools");
+      try {
+        const response: LoginResponse = await authApi.login(username, password);
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+      setModels([]);
+      setKnowledgeBases([]);
+      setStrategies([]);
+      setActiveViewState("tools");
+      try {
+        const response: LoginResponse = await authApi.login(username, password);
+```
+
+CHANGE 7
+CURRENT SNIPPET (find this block):
+```tsx
+        setAuthLoading(false);
+      }
+    },
+    [showNotification],
+  );
+
+  const logout = useCallback(() => {
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+        setAuthLoading(false);
+      }
+    },
+    [dispatch, showNotification],
+  );
+
+  const logout = useCallback(() => {
+```
+
+CHANGE 8
+CURRENT SNIPPET (find this block):
+```tsx
+    setModels([]);
+    setKnowledgeBases([]);
+    setStrategies([]);
+    setAgents([]);
+    void authApi.logout(token);
+    showNotification("Logged out.");
+  }, [accessToken, dispatch, showNotification]);
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+    setModels([]);
+    setKnowledgeBases([]);
+    setStrategies([]);
+    void authApi.logout(token);
+    showNotification("Logged out.");
+  }, [accessToken, dispatch, showNotification]);
+```
+
+CHANGE 9
+CURRENT SNIPPET (find this block):
+```tsx
+    await refetchUsers();
+  };
+
+  const addAgent = async (data: CreateAgentRequest) => {
+    await agentsApi.createAgent(data);
+    showNotification("Agent created.");
+    const result = await agentsApi.getAgents(1, 200);
+    setAgents((result?.items ?? []).map(normalizeAgent).filter((a) => a.id));
+  };
+  const updateAgent = async (id: string, data: PatchAgentRequest) => {
+    await agentsApi.patchAgent(id, data);
+    showNotification("Agent saved.");
+    const result = await agentsApi.getAgents(1, 200);
+    setAgents((result?.items ?? []).map(normalizeAgent).filter((a) => a.id));
+  };
+  const deleteAgent = async (agentId: string) => {
+    await agentsApi.deleteAgent(agentId);
+    showNotification("Agent deleted.");
+    setAgents((prev) => prev.filter((a) => a.id !== agentId));
+  };
+
+  const publishAgent = async (agentId: string) => {
+    await agentsApi.publishAgent(agentId);
+    const result = await agentsApi.getAgents(1, 200);
+    setAgents((result?.items ?? []).map(normalizeAgent).filter((a) => a.id));
+  };
+  const unpublishAgent = async (agentId: string) => {
+    await agentsApi.unpublishAgent(agentId);
+    const result = await agentsApi.getAgents(1, 200);
+    setAgents((result?.items ?? []).map(normalizeAgent).filter((a) => a.id));
+  };
+  const setTheme = (theme: "light" | "dark" | "enterprise") => {
+    setThemeState(theme);
+    localStorage.setItem("ai_platform_theme", theme);
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+    await refetchUsers();
+  };
+
+  const setTheme = (theme: "light" | "dark" | "enterprise") => {
+    setThemeState(theme);
+    localStorage.setItem("ai_platform_theme", theme);
+```
+
+CHANGE 10
+CURRENT SNIPPET (find this block):
+```tsx
+    gateways,
+    models,
+    knowledgeBases,
+    agents,
+    strategies,
+    ingestedDocs,
+    auditLogs,
+    reloadPlatformData,
+    addAgent,
+    updateAgent,
+    deleteAgent,
+    publishAgent,
+    unpublishAgent,
+    selectedPlaygroundAgentId,
+    setSelectedPlaygroundAgentId,
+    activeView: activeViewState,
+    setActiveView,
+    notification,
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+    gateways,
+    models,
+    knowledgeBases,
+    strategies,
+    ingestedDocs,
+    auditLogs,
+    reloadPlatformData,
+    activeView: activeViewState,
+    setActiveView,
+    notification,
+```
+
+
+==============================================================================
+FILE PATH: src/components/agents/AgentStudioView.tsx
+==============================================================================
+
+CHANGE 1
+CURRENT SNIPPET (find this block):
+```tsx
+
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  AlertCircle,
+  Bot,
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertCircle,
+  Bot,
+```
+
+CHANGE 2
+CURRENT SNIPPET (find this block):
+```tsx
+} from "lucide-react";
+import { usePlatform } from "../../context/PlatformContext";
+import { PERMISSIONS } from "../../config/permissions";
+import { agentsApi } from "../../api/agents";
+import { groupName, userGroupEntries } from "../../api/groupDirectory";
+import {
+  normalizeAgent,
+  normalizeEditorOptions,
+  toCreatePayload,
+  type AgentEditorOptionsDto,
+  type AgentKnowledgeBaseRef,
+  type AgentToolRef,
+  type AgentUi,
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+} from "lucide-react";
+import { usePlatform } from "../../context/PlatformContext";
+import { PERMISSIONS } from "../../config/permissions";
+import { groupName, userGroupEntries } from "../../api/groupDirectory";
+import {
+  agentErrorMessage,
+  useCreateAgentMutation,
+  useDeleteAgentMutation,
+  useGetAgentsQuery,
+  useGetEditorOptionsQuery,
+  useLazyGetAgentQuery,
+  usePatchAgentMutation,
+  usePublishAgentMutation,
+  useUnpublishAgentMutation,
+} from "../../store/agentApi";
+import {
+  toCreatePayload,
+  type AgentKnowledgeBaseRef,
+  type AgentToolRef,
+  type AgentUi,
+```
+
+CHANGE 3
+CURRENT SNIPPET (find this block):
+```tsx
+} from "../../types/agent";
+import { Modal } from "../../rag/Overlays";
+
+const emptyForm = {
+  name: "",
+  description: "",
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+} from "../../types/agent";
+import { Modal } from "../../rag/Overlays";
+
+const AGENT_PAGE_SIZE = 25;
+
+const emptyForm = {
+  name: "",
+  description: "",
+```
+
+CHANGE 4
+CURRENT SNIPPET (find this block):
+```tsx
+
+export const AgentStudioView: React.FC = () => {
+  const {
+    agents,
+    currentUser,
+    hasPermission,
+    reloadPlatformData,
+    showNotification,
+  } = usePlatform();
+
+  const canCreate = hasPermission(PERMISSIONS.Agent.Create);
+  const canEdit = hasPermission(PERMISSIONS.Agent.Edit);
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+
+export const AgentStudioView: React.FC = () => {
+  const {
+    currentUser,
+    hasPermission,
+    showNotification,
+  } = usePlatform();
+  const [agentPage, setAgentPage] = useState(1);
+  const agentListQuery = useGetAgentsQuery({
+    page: agentPage,
+    pageSize: AGENT_PAGE_SIZE,
+  });
+  const agents = agentListQuery.currentData?.items ?? [];
+  const totalAgents = agentListQuery.data?.totalCount ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalAgents / AGENT_PAGE_SIZE));
+  const [loadAgent, { isFetching: agentDetailLoading }] =
+    useLazyGetAgentQuery();
+  const [createAgentMutation] = useCreateAgentMutation();
+  const [patchAgentMutation] = usePatchAgentMutation();
+  const [deleteAgentMutation] = useDeleteAgentMutation();
+  const [publishAgentMutation] = usePublishAgentMutation();
+  const [unpublishAgentMutation] = useUnpublishAgentMutation();
+
+  const canCreate = hasPermission(PERMISSIONS.Agent.Create);
+  const canEdit = hasPermission(PERMISSIONS.Agent.Edit);
+```
+
+CHANGE 5
+CURRENT SNIPPET (find this block):
+```tsx
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [options, setOptions] = useState<AgentEditorOptionsDto | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<AgentUi | null>(null);
+  const [mode, setMode] = useState<"create" | "edit">("create");
+  const [form, setForm] = useState<FormState>(emptyForm);
+  const [formTab, setFormTab] = useState<FormTabKey>("access");
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const readOnly = mode === "edit" && !canEdit;
+
+  /* Groups offered on the Access tab: mine, plus any group already on the
+     agent being edited (so an existing grant is shown, never silently
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<AgentUi | null>(null);
+  const [mode, setMode] = useState<"create" | "edit">("create");
+  const [form, setForm] = useState<FormState>(emptyForm);
+  const [formTab, setFormTab] = useState<FormTabKey>("access");
+  const [modalOpen, setModalOpen] = useState(false);
+  const selectedRequestId = useRef<string | null>(null);
+  const shouldFetchEditorOptions =
+    modalOpen && (mode === "create" || detail !== null);
+  const editorOptionsQuery = useGetEditorOptionsQuery(
+    { groupIds: form.groupIds },
+    { skip: !shouldFetchEditorOptions },
+  );
+  const options = editorOptionsQuery.currentData ?? null;
+
+  const readOnly = mode === "edit" && !canEdit;
+  const actionLoading =
+    loading || agentDetailLoading || editorOptionsQuery.isFetching;
+
+  /* Groups offered on the Access tab: mine, plus any group already on the
+     agent being edited (so an existing grant is shown, never silently
+```
+
+CHANGE 6
+CURRENT SNIPPET (find this block):
+```tsx
+    [options],
+  );
+
+  const loadOptions = async (groupIds: string[]) => {
+    try {
+      const next = normalizeEditorOptions(
+        await agentsApi.getEditorOptions(groupIds),
+      );
+
+      setOptions(next);
+
+      setForm((current) => {
+        const modelIds = new Set((next.models ?? []).map((m) => m.id));
+
+        const kbIds = new Set((next.knowledgeBases ?? []).map((k) => k.id));
+
+        const toolIds = new Set((next.tools ?? []).map((t) => t.id));
+
+        return {
+          ...current,
+          modelId: modelIds.has(current.modelId) ? current.modelId : "",
+          knowledgeBases: current.knowledgeBases.filter((k) =>
+            kbIds.has(k.knowledgeBaseId),
+          ),
+          tools: current.tools.filter((t) => toolIds.has(t.toolId)),
+        };
+      });
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Failed to load editor options (models / KBs / tools).",
+      );
+    }
+  };
+
+  /*
+   * The sorted group selection is used as the dependency key.
+   * This means:
+   *
+   * [A, B] === [B, A]
+   *
+   * from the API-fetch perspective, so changing checkbox order does not
+   * trigger an unnecessary reload.
+   */
+  const groupKey = form.groupIds.slice().sort().join(",");
+
+  useEffect(() => {
+    if (!modalOpen) return;
+
+    void loadOptions(form.groupIds);
+
+    // groupKey is the sorted selection, so order of clicks does not refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupKey]);
+
+  /*
+   * One group available: pre-select it when creating.
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+    [options],
+  );
+
+  useEffect(() => {
+    if (!options) return;
+
+    setForm((current) => {
+      const modelIds = new Set(options.models.map((model) => model.id));
+      const knowledgeBaseIds = new Set(
+        options.knowledgeBases.map((knowledgeBase) => knowledgeBase.id),
+      );
+      const toolIds = new Set(options.tools.map((tool) => tool.id));
+
+      return {
+        ...current,
+        modelId: modelIds.has(current.modelId) ? current.modelId : "",
+        knowledgeBases: current.knowledgeBases.filter((knowledgeBase) =>
+          knowledgeBaseIds.has(knowledgeBase.knowledgeBaseId),
+        ),
+        tools: current.tools.filter((tool) => toolIds.has(tool.toolId)),
+      };
+    });
+  }, [options]);
+
+  useEffect(() => {
+    if (agentPage > totalPages) setAgentPage(totalPages);
+  }, [agentPage, totalPages]);
+
+  /*
+   * One group available: pre-select it when creating.
+```
+
+CHANGE 7
+CURRENT SNIPPET (find this block):
+```tsx
+    setError("");
+
+    try {
+      await Promise.all([reloadPlatformData(), loadOptions(form.groupIds)]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load agents.");
+    } finally {
+      setLoading(false);
+    }
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+    setError("");
+
+    try {
+      await agentListQuery.refetch().unwrap();
+      if (shouldFetchEditorOptions)
+        await editorOptionsQuery.refetch().unwrap();
+    } catch (e) {
+      setError(agentErrorMessage(e, "Failed to refresh agent data."));
+    } finally {
+      setLoading(false);
+    }
+```
+
+CHANGE 8
+CURRENT SNIPPET (find this block):
+```tsx
+  const openCreate = () => {
+    const initialGroups = myGroups[0]?.id ? [myGroups[0].id] : [];
+
+    setMode("create");
+    setSelectedId(null);
+    setDetail(null);
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+  const openCreate = () => {
+    const initialGroups = myGroups[0]?.id ? [myGroups[0].id] : [];
+
+    selectedRequestId.current = null;
+    setMode("create");
+    setSelectedId(null);
+    setDetail(null);
+```
+
+CHANGE 9
+CURRENT SNIPPET (find this block):
+```tsx
+  };
+
+  const openEdit = async (id: string) => {
+    setError("");
+    setFormTab("basics");
+    setModalOpen(true);
+    setMode("edit");
+    setSelectedId(id);
+    setLoading(true);
+
+    try {
+      const dto = await agentsApi.getAgent(id);
+      const agent = normalizeAgent(dto);
+
+      setDetail(agent);
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+  };
+
+  const openEdit = async (id: string) => {
+    selectedRequestId.current = id;
+    setError("");
+    setFormTab("basics");
+    setModalOpen(true);
+    setMode("edit");
+    setSelectedId(id);
+    setDetail(null);
+    setForm(emptyForm);
+
+    try {
+      const agent = await loadAgent(id, true).unwrap();
+      if (selectedRequestId.current !== id) return;
+
+      setDetail(agent);
+```
+
+CHANGE 10
+CURRENT SNIPPET (find this block):
+```tsx
+        memoryInstructions: agent.memoryInstructions,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load agent.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const closeModal = () => {
+    setModalOpen(false);
+    setError("");
+  };
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+        memoryInstructions: agent.memoryInstructions,
+      });
+    } catch (e) {
+      if (selectedRequestId.current === id)
+        setError(agentErrorMessage(e, "Failed to load agent."));
+    }
+  };
+
+  const closeModal = () => {
+    selectedRequestId.current = null;
+    setModalOpen(false);
+    setError("");
+  };
+```
+
+CHANGE 11
+CURRENT SNIPPET (find this block):
+```tsx
+
+    try {
+      if (mode === "create") {
+        const created = await agentsApi.createAgent(payload());
+
+        showNotification?.(`Created ${created.name}`);
+
+        await reloadPlatformData();
+        await openEdit(created.id);
+      } else if (selectedId) {
+        const updated = await agentsApi.patchAgent(selectedId, payload());
+
+        showNotification?.(`Saved ${updated.name}`);
+
+        setDetail(normalizeAgent(updated));
+        await reloadPlatformData();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed.");
+    } finally {
+      setLoading(false);
+    }
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+
+    try {
+      if (mode === "create") {
+        const created = await createAgentMutation(payload()).unwrap();
+
+        showNotification?.(`Created ${created.name}`);
+
+        await openEdit(created.id);
+      } else if (selectedId) {
+        const updated = await patchAgentMutation({
+          id: selectedId,
+          data: payload(),
+        }).unwrap();
+
+        showNotification?.(`Saved ${updated.name}`);
+
+        setDetail(updated);
+      }
+    } catch (err) {
+      setError(agentErrorMessage(err, "Save failed."));
+    } finally {
+      setLoading(false);
+    }
+```
+
+CHANGE 12
+CURRENT SNIPPET (find this block):
+```tsx
+    setError("");
+
+    try {
+      await agentsApi.deleteAgent(selectedId);
+
+      showNotification?.("Agent deleted.");
+
+      closeModal();
+
+      await reloadPlatformData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed.");
+    } finally {
+      setLoading(false);
+    }
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+    setError("");
+
+    try {
+      await deleteAgentMutation(selectedId).unwrap();
+
+      showNotification?.("Agent deleted.");
+
+      closeModal();
+
+    } catch (err) {
+      setError(agentErrorMessage(err, "Delete failed."));
+    } finally {
+      setLoading(false);
+    }
+```
+
+CHANGE 13
+CURRENT SNIPPET (find this block):
+```tsx
+    setError("");
+
+    try {
+      const dto = publish
+        ? await agentsApi.publishAgent(selectedId)
+        : await agentsApi.unpublishAgent(selectedId);
+
+      setDetail(normalizeAgent(dto));
+
+      await reloadPlatformData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Publish failed.");
+    } finally {
+      setLoading(false);
+    }
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+    setError("");
+
+    try {
+      const updated = publish
+        ? await publishAgentMutation(selectedId).unwrap()
+        : await unpublishAgentMutation(selectedId).unwrap();
+      setDetail(updated);
+    } catch (err) {
+      setError(agentErrorMessage(err, "Publish failed."));
+    } finally {
+      setLoading(false);
+    }
+```
+
+CHANGE 14
+CURRENT SNIPPET (find this block):
+```tsx
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={loading}
+            className="px-3 py-2 rounded bg-slate-800 text-slate-200 text-xs"
+          >
+            <RefreshCw
+              className={`w-4 h-4 inline mr-1 ${loading ? "animate-spin" : ""}`}
+            />
+            Refresh
+          </button>
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={loading || agentListQuery.isFetching}
+            className="px-3 py-2 rounded bg-slate-800 text-slate-200 text-xs"
+          >
+            <RefreshCw
+              className={`w-4 h-4 inline mr-1 ${loading || agentListQuery.isFetching ? "animate-spin" : ""}`}
+            />
+            Refresh
+          </button>
+```
+
+CHANGE 15
+CURRENT SNIPPET (find this block):
+```tsx
+        )}
+
+      <div className="space-y-3">
+        {agents.length === 0 && (
+          <div className="p-8 rounded-xl border border-dashed border-slate-800 text-center text-xs text-slate-500">
+            No agents visible to your groups.
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {agents.map((agent) => (
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+        )}
+
+      <div className="space-y-3">
+        {agentListQuery.isError && (
+          <div className="p-3 rounded-lg border border-rose-500/40 bg-rose-500/10 text-xs text-rose-200">
+            {agentErrorMessage(agentListQuery.error, "Failed to load agents.")}
+          </div>
+        )}
+        {agentListQuery.isFetching && agents.length === 0 && (
+          <div className="p-8 rounded-xl border border-dashed border-slate-800 text-center text-xs text-slate-500">
+            Loading agents…
+          </div>
+        )}
+        {!agentListQuery.isFetching &&
+          !agentListQuery.isError &&
+          agents.length === 0 && (
+          <div className="p-8 rounded-xl border border-dashed border-slate-800 text-center text-xs text-slate-500">
+            No agents visible to your groups.
+          </div>
+          )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {agents.map((agent) => (
+```
+
+CHANGE 16
+CURRENT SNIPPET (find this block):
+```tsx
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <Modal
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+            </button>
+          ))}
+        </div>
+        {totalAgents > 0 && (
+          <div className="flex items-center justify-between gap-3 text-xs text-slate-400">
+            <span>
+              Showing {(agentPage - 1) * AGENT_PAGE_SIZE + 1}–
+              {Math.min(agentPage * AGENT_PAGE_SIZE, totalAgents)} of{" "}
+              {totalAgents}
+            </span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={agentPage <= 1 || agentListQuery.isFetching}
+                onClick={() => setAgentPage((page) => Math.max(1, page - 1))}
+                className="px-3 py-1.5 rounded bg-slate-800 text-slate-200 disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <span className="py-1.5">
+                Page {agentPage} of {totalPages}
+              </span>
+              <button
+                type="button"
+                disabled={agentPage >= totalPages || agentListQuery.isFetching}
+                onClick={() =>
+                  setAgentPage((page) => Math.min(totalPages, page + 1))
+                }
+                className="px-3 py-1.5 rounded bg-slate-800 text-slate-200 disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <Modal
+```
+
+CHANGE 17
+CURRENT SNIPPET (find this block):
+```tsx
+              {mode === "edit" && canDelete && (
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => void remove()}
+                  className="px-3.5 py-2 rounded-lg bg-rose-800 hover:bg-rose-700 text-white text-xs transition-colors"
+                >
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+              {mode === "edit" && canDelete && (
+                <button
+                  type="button"
+                  disabled={actionLoading}
+                  onClick={() => void remove()}
+                  className="px-3.5 py-2 rounded-lg bg-rose-800 hover:bg-rose-700 text-white text-xs transition-colors"
+                >
+```
+
+CHANGE 18
+CURRENT SNIPPET (find this block):
+```tsx
+                detail?.status === "Published" && (
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => void publish(false)}
+                    className="px-3.5 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs transition-colors"
+                  >
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+                detail?.status === "Published" && (
+                  <button
+                    type="button"
+                    disabled={actionLoading}
+                    onClick={() => void publish(false)}
+                    className="px-3.5 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs transition-colors"
+                  >
+```
+
+CHANGE 19
+CURRENT SNIPPET (find this block):
+```tsx
+                detail?.status !== "Published" && (
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => void publish(true)}
+                    className="px-3.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs transition-colors"
+                  >
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+                detail?.status !== "Published" && (
+                  <button
+                    type="button"
+                    disabled={actionLoading}
+                    onClick={() => void publish(true)}
+                    className="px-3.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs transition-colors"
+                  >
+```
+
+CHANGE 20
+CURRENT SNIPPET (find this block):
+```tsx
+                <button
+                  type="submit"
+                  form="agent-studio-form"
+                  disabled={loading}
+                  className="px-3.5 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold transition-colors"
+                >
+                  <Save className="w-3.5 h-3.5 inline mr-1" />
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+                <button
+                  type="submit"
+                  form="agent-studio-form"
+                  disabled={actionLoading}
+                  className="px-3.5 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold transition-colors"
+                >
+                  <Save className="w-3.5 h-3.5 inline mr-1" />
+```
+
+CHANGE 21
+CURRENT SNIPPET (find this block):
+```tsx
+          )
+        }
+      >
+        {!canCreate && mode === "create" ? (
+          <div className="text-xs text-slate-500">
+            <Lock className="w-4 h-4 inline mr-1" />
+            You have view access only. Open an existing agent to inspect it.
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+          )
+        }
+      >
+        {mode === "edit" && agentDetailLoading ? (
+          <div className="py-8 text-center text-xs text-slate-400">
+            Loading agent configuration…
+          </div>
+        ) : !canCreate && mode === "create" ? (
+          <div className="text-xs text-slate-500">
+            <Lock className="w-4 h-4 inline mr-1" />
+            You have view access only. Open an existing agent to inspect it.
+```
+
+CHANGE 22
+CURRENT SNIPPET (find this block):
+```tsx
+              ))}
+            </div>
+
+            {error && (
+              <div className="p-3 rounded-lg border border-rose-500/40 bg-rose-500/10 text-xs text-rose-200">
+                <AlertCircle className="w-4 h-4 inline mr-1" />
+                {error}
+              </div>
+            )}
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+              ))}
+            </div>
+
+            {(error || editorOptionsQuery.error) && (
+              <div className="p-3 rounded-lg border border-rose-500/40 bg-rose-500/10 text-xs text-rose-200">
+                <AlertCircle className="w-4 h-4 inline mr-1" />
+                {error ||
+                  agentErrorMessage(
+                    editorOptionsQuery.error,
+                    "Failed to load editor options.",
+                  )}
+              </div>
+            )}
+```
+
+
+==============================================================================
+FILE PATH: src/components/playground/PlaygroundView.tsx
+==============================================================================
+
+CHANGE 1
+CURRENT SNIPPET (find this block):
+```tsx
+
+import React, { useState } from "react";
+import { AlertTriangle, Bot } from "lucide-react";
+import { usePlatform } from "../../context/PlatformContext";
+import { executionApi } from "../../api/execution";
+
+export const PlaygroundView: React.FC = () => {
+  const { agents, selectedPlaygroundAgentId, setSelectedPlaygroundAgentId } =
+    usePlatform();
+  const active =
+    agents.find((a) => a.id === selectedPlaygroundAgentId) || agents[0];
+  const [message, setMessage] = useState("");
+  const [threadId, setThreadId] = useState("");
+  const [busy, setBusy] = useState(false);
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+
+import React, { useEffect, useState } from "react";
+import { AlertTriangle, Bot } from "lucide-react";
+import { executionApi } from "../../api/execution";
+import { useGetAgentsQuery } from "../../store/agentApi";
+
+export const PlaygroundView: React.FC = () => {
+  const {
+    currentData: agentResult,
+    isLoading: agentsLoading,
+    isError: agentsError,
+  } = useGetAgentsQuery({ page: 1, pageSize: 200 });
+  const agents = agentResult?.items ?? [];
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!agents.some((agent) => agent.id === selectedAgentId)) {
+      setSelectedAgentId(agents[0]?.id ?? null);
+    }
+  }, [agents, selectedAgentId]);
+  const active =
+    agents.find((agent) => agent.id === selectedAgentId) || agents[0];
+  const [message, setMessage] = useState("");
+  const [threadId, setThreadId] = useState("");
+  const [busy, setBusy] = useState(false);
+```
+
+CHANGE 2
+CURRENT SNIPPET (find this block):
+```tsx
+        <select
+          value={active?.id || ""}
+          onChange={(e) => {
+            setSelectedPlaygroundAgentId(e.target.value || null);
+            setThreadId("");
+            setTurns([]);
+          }}
+          className="w-full bg-slate-800 rounded-lg p-2 text-xs text-white"
+        >
+          {agents.length === 0 && (
+            <option value="">No agents returned by backend</option>
+          )}
+          {agents.map((a) => (
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+        <select
+          value={active?.id || ""}
+          onChange={(e) => {
+            setSelectedAgentId(e.target.value || null);
+            setThreadId("");
+            setTurns([]);
+          }}
+          className="w-full bg-slate-800 rounded-lg p-2 text-xs text-white"
+        >
+          {agentsLoading && agents.length === 0 && (
+            <option value="">Loading agents…</option>
+          )}
+          {agentsError && agents.length === 0 && (
+            <option value="">Could not load agents</option>
+          )}
+          {!agentsLoading && !agentsError && agents.length === 0 && (
+            <option value="">No agents returned by backend</option>
+          )}
+          {agents.map((a) => (
+```
+
+CHANGE 3
+CURRENT SNIPPET (find this block):
+```tsx
+        )}
+      </div>
+
+      <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3 min-h-40">
+        {turns.length === 0 && (
+          <p className="text-xs text-slate-500">No test messages yet.</p>
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+        )}
+      </div>
+
+      {agentsError && (
+        <div className="p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-xs text-amber-200">
+          Could not load the agent list. Try refreshing the page.
+        </div>
+      )}
+
+      <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3 min-h-40">
+        {turns.length === 0 && (
+          <p className="text-xs text-slate-500">No test messages yet.</p>
+```
+
+
+==============================================================================
+FILE PATH: src/components/audit/AuditLogsView.tsx
+==============================================================================
+
+CHANGE 1
+CURRENT SNIPPET (find this block):
+```tsx
+  AuditRunDetail,
+  AuditRunItem,
+} from "../../api/execution";
+import { DataTable, Drawer, Panel } from "../../rag/Overlays";
+import { BTN, HELP, INPUT, Pill } from "../../rag/RagUI";
+
+const PAGE = 25;
+const tone = (s: string) =>
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+  AuditRunDetail,
+  AuditRunItem,
+} from "../../api/execution";
+import { useGetAgentsQuery } from "../../store/agentApi";
+import { DataTable, Drawer, Panel } from "../../rag/Overlays";
+import { BTN, HELP, INPUT, Pill } from "../../rag/RagUI";
+import { PERMISSIONS } from "../../config/permissions";
+
+const PAGE = 25;
+const tone = (s: string) =>
+```
+
+CHANGE 2
+CURRENT SNIPPET (find this block):
+```tsx
+);
+
+export const AuditLogsView: React.FC = () => {
+  const { agents, theme } = usePlatform();
+  const [agentId, setAgentId] = useState("");
+  const [f, setF] = useState({
+    status: "",
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+);
+
+export const AuditLogsView: React.FC = () => {
+  const { theme, hasPermission } = usePlatform();
+  const canViewAgents = hasPermission(PERMISSIONS.Agent.View);
+  const {
+    currentData: agentResult,
+    isLoading: agentsLoading,
+    isError: agentsError,
+  } = useGetAgentsQuery(
+    { page: 1, pageSize: 200 },
+    { skip: !canViewAgents },
+  );
+  const agents = agentResult?.items ?? [];
+  const [agentId, setAgentId] = useState("");
+  const [f, setF] = useState({
+    status: "",
+```
+
+CHANGE 3
+CURRENT SNIPPET (find this block):
+```tsx
+              setPage(0);
+            }}
+          >
+            {!agents.length && <option value="">No agents available</option>}
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+              setPage(0);
+            }}
+          >
+            {!agents.length && (
+              <option value="">
+                {agentsLoading
+                  ? "Loading agents…"
+                  : agentsError
+                    ? "Could not load agents"
+                    : !canViewAgents
+                      ? "Agent view permission required"
+                    : "No agents available"}
+              </option>
+            )}
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+```
+
+
+==============================================================================
+FILE PATH: src/components/audit/ExecutionActivity.tsx
+==============================================================================
+
+CHANGE 1
+CURRENT SNIPPET (find this block):
+```tsx
+
+import React, { useEffect, useState } from "react";
+import { Activity } from "lucide-react";
+import { usePlatform } from "../../context/PlatformContext";
+import { ActivityRun, executionApi } from "../../api/execution";
+
+export const ExecutionActivity: React.FC = () => {
+  const { agents, theme } = usePlatform();
+  const [rows, setRows] = useState<ActivityRun[]>([]);
+  const [error, setError] = useState("");
+  const [selected, setSelected] = useState<ActivityRun | null>(null);
+
+  useEffect(() => {
+    let stop = false;
+    const load = async () => {
+      try {
+        const next = await executionApi.loadActivity(
+          agents.map((agent) => ({ id: agent.id, name: agent.name })),
+        );
+        if (!stop) {
+          setRows(next);
+          setError("");
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+
+import React, { useEffect, useMemo, useState } from "react";
+import { Activity } from "lucide-react";
+import { usePlatform } from "../../context/PlatformContext";
+import { ActivityRun, executionApi } from "../../api/execution";
+import { PERMISSIONS } from "../../config/permissions";
+import { useGetAgentsQuery } from "../../store/agentApi";
+
+export const ExecutionActivity: React.FC = () => {
+  const { theme, hasPermission } = usePlatform();
+  const canViewAgents = hasPermission(PERMISSIONS.Agent.View);
+  const {
+    currentData: agentResult,
+    isLoading: agentsLoading,
+    isError: agentsError,
+  } = useGetAgentsQuery(
+    { page: 1, pageSize: 200 },
+    { skip: !canViewAgents },
+  );
+  const agents = agentResult?.items ?? [];
+  const agentReferences = useMemo(
+    () => agents.map((agent) => ({ id: agent.id, name: agent.name })),
+    [agents],
+  );
+  const [rows, setRows] = useState<ActivityRun[]>([]);
+  const [error, setError] = useState("");
+  const [selected, setSelected] = useState<ActivityRun | null>(null);
+
+  useEffect(() => {
+    let stop = false;
+    if (!canViewAgents || agentsLoading) return;
+
+    const load = async () => {
+      try {
+        const next = await executionApi.loadActivity(agentReferences);
+        if (!stop) {
+          setRows(next);
+          setError("");
+```
+
+CHANGE 2
+CURRENT SNIPPET (find this block):
+```tsx
+      stop = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [agents]);
+
+  const light = theme === "light";
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+      stop = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [agentReferences, agentsLoading, canViewAgents]);
+
+  const light = theme === "light";
+```
+
+CHANGE 3
+CURRENT SNIPPET (find this block):
+```tsx
+      >
+        <Activity className="w-4 h-4 text-cyan-400" /> Agent executions
+      </h3>
+      {error && <p className="text-xs text-amber-400">{error}</p>}
+      <div className="overflow-x-auto max-h-80">
+        <table className="w-full text-xs">
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+      >
+        <Activity className="w-4 h-4 text-cyan-400" /> Agent executions
+      </h3>
+      {agentsError && (
+        <p className="text-xs text-amber-400">Could not load the agent list.</p>
+      )}
+      {error && <p className="text-xs text-amber-400">{error}</p>}
+      <div className="overflow-x-auto max-h-80">
+        <table className="w-full text-xs">
+```
+
+
+==============================================================================
+FILE PATH: src/components/layout/Sidebar.tsx
+==============================================================================
+
+CHANGE 1
+CURRENT SNIPPET (find this block):
+```tsx
+import { RolePermissionKey } from '../../types';
+import { PERMISSIONS } from '../../config/permissions';
+import DarkLogo from "../../assets/images/ccilLogo-dark.png";
+export const Sidebar: React.FC = () => {
+  const {
+     theme,
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+import { RolePermissionKey } from '../../types';
+import { PERMISSIONS } from '../../config/permissions';
+import DarkLogo from "../../assets/images/ccilLogo-dark.png";
+import { useGetAgentsQuery } from '../../store/agentApi';
+export const Sidebar: React.FC = () => {
+  const {
+     theme,
+```
+
+CHANGE 2
+CURRENT SNIPPET (find this block):
+```tsx
+  setActiveView,
+  pendingRegistrations,
+  localTools,
+  agents,
+  knowledgeBases,
+  hasPermission,
+  currentRole,
+  currentUser,
+  canAccessView,   // <-- this was missing, causing the ReferenceError / blank screen
+} = usePlatform();
+
+  const pendingToolsCount = localTools.filter((t) => String(t.status || '').toLowerCase() === 'pendingapproval').length;
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+  setActiveView,
+  pendingRegistrations,
+  localTools,
+  knowledgeBases,
+  hasPermission,
+  currentRole,
+  currentUser,
+  canAccessView,   // <-- this was missing, causing the ReferenceError / blank screen
+} = usePlatform();
+  const canViewAgents = hasPermission(PERMISSIONS.Agent.View);
+  const { data: agentSummary } = useGetAgentsQuery(
+    { page: 1, pageSize: 1 },
+    { skip: !canViewAgents },
+  );
+  const agentCount = agentSummary?.totalCount ?? 0;
+
+  const pendingToolsCount = localTools.filter((t) => String(t.status || '').toLowerCase() === 'pendingapproval').length;
+```
+
+CHANGE 3
+CURRENT SNIPPET (find this block):
+```tsx
+          label: 'Agent Studio',
+          icon: Bot,
+          permission: PERMISSIONS.Agent.View,
+          badge: agents.length,
+          badgeColor: 'bg-purple-500/20 text-purple-300',
+        },
+        {
+```
+
+UPDATED SNIPPET (paste this in its place):
+```tsx
+          label: 'Agent Studio',
+          icon: Bot,
+          permission: PERMISSIONS.Agent.View,
+          badge: agentCount,
+          badgeColor: 'bg-purple-500/20 text-purple-300',
+        },
+        {
+```
+
