@@ -17,7 +17,6 @@ from agent_execution.services.conversation_models import (
     ConversationHistory,
     MemoryContext,
 )
-from agent_execution.services.prompt_composition_service import PromptCompositionService
 from agent_execution.services.tool_definition_service import ToolDefinitionService
 
 _FINALIZE_PROMPT = (
@@ -109,32 +108,47 @@ class AgentGraphNodes:
             )
 
         instructions = ConversationMemoryService.optional_instructions_block(memory_cfg)
-        system_prompt, trim_steps = PromptCompositionService.compose_within_budget(
-            manifest,
-            _join_blocks(instructions, history_block),
-            kb_blocks,
-            artifact_block,
-            user_input,
-            self._ctx.settings.context_input_budget_chars(),
+        thread_id = state.get("thread_id")
+        context_budget = self._ctx.context_manager.budget_for_thread(
+            thread_id=str(thread_id) if thread_id else None,
+            session_id=session_id,
         )
-        if "context.trimmed:history" in trim_steps:
+        packed = self._ctx.context_manager.pack_system_context(
+            manifest,
+            budget=context_budget,
+            memory_block=_join_blocks(instructions, history_block),
+            kb_blocks=kb_blocks,
+            artifact_block=artifact_block,
+            user_input=user_input,
+        )
+        system_prompt = packed.system_prompt
+        trim_steps = packed.trim_traces
+        if packed.history_truncated:
             history_truncated = True
+        initial_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_input},
+        ]
+        fitted = self._ctx.context_manager.fit_messages(
+            initial_messages, budget=context_budget
+        )
         return {
             "session_id": session_id,
             "manifest": manifest.model_dump(mode="json"),
             "system_prompt": system_prompt,
             "llm_input": user_input,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_input},
-            ],
+            "messages": fitted.messages,
             "history_turns": [
                 {"role": turn.role, "content": turn.content} for turn in history.turns
             ],
             "memory_scope": memory_cfg.scope.value if memory_cfg.scope else None,
             "history_total_turns": len(history.turns),
             "history_turns_in_prompt": len(history_for_prompt.turns),
-            "history_truncated": history_truncated,
+            "history_truncated": history_truncated or packed.history_truncated,
+            "context_messages_trimmed": fitted.trimmed,
+            "context_input_tokens": fitted.estimated_input_tokens,
+            "context_input_budget": context_budget.input_token_budget,
+            "context_max_output_tokens": context_budget.max_output_tokens,
             "has_tools": manifest.has_tools,
             "tool_round": 0,
             "max_tool_rounds": self._ctx.settings.max_tool_rounds,
@@ -167,9 +181,20 @@ class AgentGraphNodes:
                 sections.append(f"File {filename} is attached and is not text.")
         return "Attached files:\n\n" + "\n\n".join(sections)
 
+    def _context_budget(self, state: AgentGraphState):
+        return self._ctx.context_manager.budget_for_thread(
+            thread_id=state.get("thread_id"),
+            session_id=state.get("session_id"),
+        )
+
+    def _fit_for_llm(self, state: AgentGraphState, messages: list[dict[str, Any]]):
+        budget = self._context_budget(state)
+        return self._ctx.context_manager.fit_messages(messages, budget=budget)
+
     async def call_llm(self, state: AgentGraphState) -> AgentGraphState:
         manifest = RuntimeManifest.model_validate(state["manifest"])
-        messages = _messages_for_llm(state)
+        fitted = self._fit_for_llm(state, _messages_for_llm(state))
+        messages = fitted.messages
         tool_round = state.get("tool_round", 0)
         tools = (
             ToolDefinitionService.build_openai_tools(manifest)
@@ -183,6 +208,7 @@ class AgentGraphNodes:
             bearer_token=state.get("bearer_token"),
             tools=tools,
             base_url=manifest.model.base_url,
+            max_tokens=state.get("context_max_output_tokens"),
         )
         updated = messages + [_assistant_message(result.content, result.tool_calls)]
         return {
@@ -190,7 +216,10 @@ class AgentGraphNodes:
             "messages": updated,
             "tool_calls": _tool_calls_to_state(result.tool_calls),
             "stop_reason": "completed" if not result.tool_calls else None,
-            "steps": [f"call_llm:r{tool_round}"],
+            "context_messages_trimmed": bool(state.get("context_messages_trimmed"))
+            or fitted.trimmed,
+            "context_input_tokens": fitted.estimated_input_tokens,
+            "steps": [f"call_llm:r{tool_round}", *fitted.trim_traces],
         }
 
     async def run_tools(self, state: AgentGraphState) -> AgentGraphState:
@@ -218,37 +247,51 @@ class AgentGraphNodes:
         executed = await asyncio.gather(
             *(execute_call(call) for call in state.get("tool_calls") or [])
         )
+        max_tool_chars = self._context_budget(state).tool_message_max_chars
         for item in executed:
+            output = item["output"]
+            if len(output) > max_tool_chars:
+                output = output[: max_tool_chars - 20] + "\n…[truncated]"
             messages.append(
-                {"role": "tool", "tool_call_id": item["id"], "content": item["output"]}
+                {"role": "tool", "tool_call_id": item["id"], "content": output}
             )
+        fitted = self._fit_for_llm(state, messages)
         return {
-            "messages": messages,
+            "messages": fitted.messages,
             "tool_calls": [],
             "tool_results": list(state.get("tool_results") or [])
             + [{**item, "output": item["output"][:2000]} for item in executed],
             "tool_round": tool_round,
-            "steps": [f"run_tools:r{tool_round}"],
+            "context_messages_trimmed": bool(state.get("context_messages_trimmed"))
+            or fitted.trimmed,
+            "context_input_tokens": fitted.estimated_input_tokens,
+            "steps": [f"run_tools:r{tool_round}", *fitted.trim_traces],
         }
 
     async def finalize_answer(self, state: AgentGraphState) -> AgentGraphState:
         manifest = RuntimeManifest.model_validate(state["manifest"])
         messages = list(_messages_for_llm(state))
         messages.append({"role": "user", "content": _FINALIZE_PROMPT})
+        fitted = self._fit_for_llm(state, messages)
         result = await self._ctx.llm_gateway.chat_with_messages(
             model=manifest.model.model_identifier,
-            messages=messages,
+            messages=fitted.messages,
             temperature=manifest.temperature,
             bearer_token=state.get("bearer_token"),
             tools=None,
             base_url=manifest.model.base_url,
+            max_tokens=state.get("context_max_output_tokens"),
         )
         return {
             "output": result.content,
-            "messages": messages + [{"role": "assistant", "content": result.content}],
+            "messages": fitted.messages
+            + [{"role": "assistant", "content": result.content}],
             "tool_calls": [],
             "stop_reason": "max_tool_rounds",
-            "steps": ["finalize_answer"],
+            "context_messages_trimmed": bool(state.get("context_messages_trimmed"))
+            or fitted.trimmed,
+            "context_input_tokens": fitted.estimated_input_tokens,
+            "steps": ["finalize_answer", *fitted.trim_traces],
         }
 
     async def persist_memory(self, state: AgentGraphState) -> AgentGraphState:

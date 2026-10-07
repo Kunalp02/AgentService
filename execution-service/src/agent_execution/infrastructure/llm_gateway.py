@@ -132,6 +132,7 @@ class BifrostLlmGateway:
         tools: list[dict[str, Any]] | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
+        max_tokens: int | None = None,
     ) -> ChatCompletionResult:
         resolved_base_url = self._resolve_base_url(base_url)
         if self._use_mock(resolved_base_url):
@@ -145,6 +146,8 @@ class BifrostLlmGateway:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
+        if max_tokens is not None and max_tokens > 0:
+            payload["max_tokens"] = max_tokens
         response = await self._client.post(
             self._full_url(resolved_base_url),
             headers=await self._headers(bearer_token, api_key),

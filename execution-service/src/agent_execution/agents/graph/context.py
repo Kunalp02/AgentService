@@ -6,6 +6,7 @@ from agent_execution.infrastructure.auth.service_token_provider import ServiceAu
 from agent_execution.infrastructure.conversation_store.base import ConversationHistoryStore
 from agent_execution.infrastructure.llm_gateway import BifrostLlmGateway
 from agent_execution.infrastructure.platform.platform_clients import PlatformClients
+from agent_execution.services.context_manager import ContextManager
 from agent_execution.services.conversation_memory_service import ConversationMemoryService
 from agent_execution.services.manifest_service import ManifestService, RagContextService
 from agent_execution.services.storage_client import StorageClient
@@ -18,6 +19,7 @@ from agent_execution.settings import Settings
 class AgentGraphContext:
     settings: Settings
     manifest_service: ManifestService
+    context_manager: ContextManager
     memory_service: ConversationMemoryService
     conversation_store: ConversationHistoryStore
     rag_service: RagContextService
@@ -39,6 +41,7 @@ class AgentGraphContext:
         return cls(
             settings=settings,
             manifest_service=ManifestService(settings, platform),
+            context_manager=ContextManager(settings),
             memory_service=ConversationMemoryService(settings, conversation_store),
             conversation_store=conversation_store,
             rag_service=RagContextService(platform),

@@ -71,13 +71,29 @@ class Settings(BaseSettings):
 
     context_window_tokens: int = 8192
     context_output_reserve_tokens: int = 2048
+    context_max_output_tokens: int | None = None
+    context_chars_per_token: float = 4.0
+    context_tool_round_reserve_tokens: int = 1024
+    context_tool_message_max_chars: int = 4000
     public_base_url: str = "http://172.19.204.37"
     api_key_encryption_secret: str = "keepitstable"
 
+    def resolved_max_output_tokens(self) -> int:
+        if self.context_max_output_tokens is not None:
+            return self.context_max_output_tokens
+        return self.context_output_reserve_tokens
+
+    def context_input_token_budget(self) -> int:
+        window = max(512, self.context_window_tokens)
+        max_output = min(max(1, self.resolved_max_output_tokens()), window - 1)
+        tool_reserve = min(
+            max(0, self.context_tool_round_reserve_tokens),
+            max(0, window - max_output - 256),
+        )
+        return max(256, window - max_output - tool_reserve)
+
     def context_input_budget_chars(self) -> int:
-        window = max(1, self.context_window_tokens)
-        reserve = min(max(0, self.context_output_reserve_tokens), window - 1)
-        return max(500, (window - reserve) * 4)
+        return int(self.context_input_token_budget() * max(1.0, self.context_chars_per_token))
 
     def cors_origin_list(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
