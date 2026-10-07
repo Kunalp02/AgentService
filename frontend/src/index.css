@@ -1,0 +1,345 @@
+
+@import "tailwindcss";
+
+@layer theme {
+
+    :root,
+    :host {
+        --color-red-200: oklch(88.5% 0.062 18.334);
+        --color-red-500: oklch(63.7% 0.237 25.331);
+        --color-amber-50: oklch(98.7% 0.022 95.277);
+        --color-amber-100: oklch(96.2% 0.059 95.617);
+        --color-amber-200: oklch(92.4% 0.12 95.746);
+        --color-amber-300: oklch(87.9% 0.169 91.605);
+        --color-amber-400: oklch(82.8% 0.189 84.429);
+        --color-amber-500: oklch(76.9% 0.188 70.08);
+        --color-amber-600: oklch(66.6% 0.179 58.318);
+        --color-amber-700: oklch(55.5% 0.163 48.998);
+        --color-amber-950: oklch(27.9% 0.077 45.635);
+        --color-emerald-300: oklch(84.5% 0.143 164.978);
+        --color-emerald-400: oklch(76.5% 0.177 163.223);
+        --color-emerald-500: oklch(69.6% 0.17 162.48);
+        --color-emerald-600: oklch(59.6% 0.145 163.225);
+        --color-emerald-700: oklch(50.8% 0.118 165.612);
+        --color-emerald-950: oklch(26.2% 0.051 172.552);
+        --color-cyan-300: oklch(86.5% 0.127 207.078);
+        --color-cyan-400: oklch(78.9% 0.154 211.53);
+        --color-cyan-600: oklch(60.9% 0.126 221.723);
+        --color-indigo-50: oklch(96.2% 0.018 272.314);
+        --color-indigo-100: oklch(93% 0.034 272.788);
+        --color-indigo-200: oklch(87% 0.065 274.039);
+        --color-indigo-300: oklch(78.5% 0.115 274.713);
+        --color-indigo-400: oklch(67.3% 0.182 276.935);
+        --color-indigo-500: oklch(58.5% 0.233 277.117);
+        --color-indigo-600: oklch(51.1% 0.262 276.966);
+        --color-indigo-700: oklch(45.7% 0.24 277.023);
+        --color-indigo-800: oklch(39.8% 0.195 277.366);
+        --color-indigo-950: oklch(25.7% 0.09 281.288);
+        --color-purple-300: oklch(82.7% 0.119 306.383);
+        --color-purple-400: oklch(71.4% 0.203 305.504);
+        --color-purple-500: oklch(62.7% 0.265 303.9);
+        --color-purple-600: oklch(55.8% 0.288 302.321);
+        --color-rose-200: oklch(89.2% 0.058 10.001);
+        --color-rose-300: oklch(81% 0.117 11.638);
+        --color-rose-400: oklch(71.2% 0.194 13.428);
+        --color-rose-500: oklch(64.5% 0.246 16.439);
+        --color-rose-600: oklch(58.6% 0.253 17.585);
+        --color-rose-800: oklch(45.5% 0.188 13.697);
+        --color-rose-900: oklch(41% 0.159 10.272);
+        --color-rose-950: oklch(27.1% 0.105 12.094);
+        --color-slate-50: oklch(98.4% 0.003 247.858);
+        --color-slate-100: oklch(96.8% 0.007 247.896);
+        --color-slate-200: oklch(92.9% 0.013 255.508);
+        --color-slate-300: oklch(86.9% 0.022 252.894);
+        --color-slate-400: oklch(70.4% 0.04 256.788);
+        --color-slate-500: oklch(55.4% 0.046 257.417);
+        --color-slate-600: oklch(44.6% 0.043 257.281);
+        --color-slate-700: oklch(37.2% 0.044 257.287);
+        --color-slate-800: oklch(27.9% 0.041 260.031);
+        --color-slate-900: oklch(20.8% 0.042 265.755);
+        --color-slate-950: oklch(12.9% 0.042 264.695);
+        --color-black: #000;
+        --color-white: #fff;
+        --color-primary: #174272;
+        --color-primary-hover: #1e538d;
+        --color-primary-dark: #0f3156;
+        --color-link: #0284c7;
+        --color-text-primary-light: #0a1929;
+        --color-text-primary-dark: #e8f4fd;
+    }
+}
+
+
+html {
+    overflow: hidden;
+    scrollbar-color: var(--color-slate-500) transparent;
+    scrollbar-width: 4px;
+}
+
+.background_dark,
+.background_light,
+.login_background_dark,
+.login_background_light {
+    background-color: #0f172a;
+    background-image:
+        radial-gradient(ellipse at 80% 10%, rgba(79, 70, 229, 0.22), transparent 55%),
+        linear-gradient(135deg, #0f172a 0%, #111827 100%);
+    background-repeat: no-repeat;
+    background-position: 50%;
+    background-size: cover;
+}
+
+.background_light {
+    background-color: #f8fafc;
+    background-image:
+        radial-gradient(ellipse at 80% 10%, rgba(129, 140, 248, 0.18), transparent 55%),
+        linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+}
+
+.login_background_dark {
+    background-image:
+        radial-gradient(ellipse at 50% 0%, rgba(14, 165, 233, 0.18), transparent 60%),
+        linear-gradient(135deg, #0f172a 0%, #020617 100%);
+}
+
+.login_background_light {
+    background-image:
+        radial-gradient(ellipse at 50% 0%, rgba(99, 102, 241, 0.14), transparent 60%),
+        linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+}
+
+.panel-border {
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+.panel-border-light {
+    border-color: rgba(0, 0, 0, 0.05);
+}
+
+.bg_dark, .bg_dark_inner {
+    background: linear-gradient(135deg,#0284C7 0%, #174272 20%, #4f39f650 100%);
+
+}
+
+.bg_light, .bg_light_inner {
+    background: linear-gradient(135deg, #b1e5ff 0%, #b4d7ff 20%, #d9ebff 100%);
+}
+/* .bg_dark,
+.bg_light {
+    background-size: 300% 300%;
+    animation: pulseColor 20s ease-in-out infinite;
+} */
+
+@keyframes pulseColor {
+    0% {
+        background-position: 0% 50%;
+    }
+
+    50% {
+        background-position: 30% 50%;
+    }
+
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+/* Update Tailwindcss Class start */
+@layer utilities {
+    .max-w-7xl {
+        max-width: 100%;
+    }
+
+    .bg-slate-900,
+    .bg-slate-900\/90,
+    .bg-gradient-to-r {
+        background: rgba(0, 0, 0, 0.1);
+    }
+
+    @supports (backdrop-filter: blur(10px)) or (-webkit-backdrop-filter: blur(10px)) {
+
+        .bg-slate-900,
+        .bg-slate-900\/90,
+        .bg-gradient-to-r {
+            background: rgba(0, 0, 0, 0.05);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+    }
+}
+
+/* Update Tailwindcss Class end */
+
+/* Create New class with Tailwindcss Class start*/
+@layer components {
+    .btn-primary {
+        @apply bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg transition-colors;
+    }
+
+    .btn-primary:hover {
+        @apply bg-blue-700;
+        transform: translateY(-1px);
+    }
+
+    .btn-secondary{
+        @apply flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-200
+    }
+
+    .panel {
+        @apply shadow-lg/3 border p-4 rounded-2xl;
+        /* background: rgba(0, 0, 0, 0.1); */
+    }
+
+    /* @supports (backdrop-filter: blur(10px)) or (-webkit-backdrop-filter: blur(10px)) {
+        .panel {
+            background: rgba(0, 0, 0, 0.05);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+    } */
+
+    .input-base-dark {
+        @apply w-full border rounded-lg pl-9 pr-3 py-2 text-sm bg-slate-800 border-slate-700 text-slate-200 focus:outline-none focus:border-amber-800 font-mono
+    }
+
+    .input-base-light {
+        @apply w-full border rounded-lg pl-9 pr-3 py-2 text-sm bg-slate-200 border-slate-300 text-slate-900 focus:outline-none focus:border-amber-800 font-mono
+    }
+
+    .label-light {
+        @apply block text-xs font-semibold text-slate-700 mb-1.5
+    }
+
+    .label-dark {
+        @apply block text-xs font-semibold text-slate-500 mb-1.5
+    }
+
+    .btn-primary-dark {
+        @apply w-full py-2.5 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:bg-amber-600/50 disabled:text-white/50 text-white shadow-md shadow-amber-600/30 transition-all flex items-center justify-center gap-2 uppercase text-sm
+    }
+
+    .btn-primary-light {
+        @apply w-full py-2.5 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:bg-amber-800 text-white shadow-md shadow-amber-600/30 transition-all flex items-center justify-center gap-2 uppercase text-sm
+    }
+
+    .header {
+        @apply text-xl md:text-2xl font-bold mt-1.5
+    }
+
+    .header-disciption {
+        @apply text-sm mt-1 max-w-2xl
+    }
+
+    .table-class {
+        @apply w-full text-left text-xs text-slate-300
+    }  
+
+    .thead-light {
+        @apply bg-slate-500/20 text-slate-700 uppercase tracking-wider text-[10px] border-b border-slate-300
+    }
+
+    .thead-dark {
+        @apply bg-slate-700 text-slate-300 uppercase tracking-wider text-[10px] border-b border-slate-800
+    }
+
+    .thead-light th {
+        @apply py-3.5 px-4 font-semibold
+    }
+
+    .thead-dark th {
+        @apply py-3.5 px-4 font-semibold
+    }
+
+    .table-body-light {
+        @apply divide-slate-300/60 divide-y overflow-y-auto
+    }
+
+    .table-body-dark {
+        @apply divide-slate-700/60 divide-y overflow-y-auto
+    }
+
+    .table-body-light td {
+        @apply py-3 px-4 text-slate-800 text-xs
+    }
+
+    .table-body-dark td {
+        @apply py-3 px-4 text-slate-200 text-xs
+    }
+
+    .grid-btn-edit {
+        @apply p-1.5 rounded-lg text-sky-500 hover:text-sky-600 hover:bg-slate-800
+    }
+
+    .warning-panle{
+        @apply rounded-2xl border p-5 bg-amber-500/10 border-amber-500/50
+    }
+
+    .warning-panle h3{
+        @apply text-sm font-bold text-amber-200
+    }
+    .warning-panle p{
+        @apply text-xs text-slate-300 leading-relaxed mt-1.5
+    }
+
+    .modal-title{
+        @apply text-sm font-bold flex items-center gap-2 text-sky-50
+    }
+}
+
+/* Create New class with Tailwindcss Class end*/
+
+/* Glass Effect start */
+.glass-card {
+    background: rgba(0, 0, 0, 0.1);
+}
+
+/* Enhancements for browsers that DO support it */
+@supports (backdrop-filter: blur(10px)) or (-webkit-backdrop-filter: blur(10px)) {
+    .glass-card {
+        background: rgba(0, 0, 0, 0.1);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+    }
+}
+
+/* Glass Effect End */
+
+
+.bg-active {
+    background-color: var(--color-link);
+}
+
+.color-link {
+    color: var(--color-link);
+}
+
+.color-primary {
+    color: var(--color-primary);
+}
+
+.color-white {
+    color: var(--color-white);
+}
+
+.color-black {
+    color: var(--color-black);
+}
+
+.text-gradient-effect {
+  /* font-size: clamp(12px,5vw,16px); */
+  /* font-weight: 700; */
+  letter-spacing: .02em;
+  line-height: 1;
+  background: linear-gradient(100deg,oklch(0.75 0.18 330),oklch(0.8 0.16 250),oklch(0.87 0.15 180),oklch(0.8 0.18 300),oklch(0.75 0.18 330)) 0 0/300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: text-drift 7s linear infinite;
+  filter: drop-shadow(0 0 26px rgba(120,140,255,.25));
+}
+  @keyframes text-drift {
+    to {
+      background-position: 300% 0;
+    }
+
+}
