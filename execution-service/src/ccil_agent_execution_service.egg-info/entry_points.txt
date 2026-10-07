@@ -1,0 +1,3 @@
+[console_scripts]
+agent-execution = agent_execution.main:main
+agent-execution-worker = agent_execution.worker_main:main

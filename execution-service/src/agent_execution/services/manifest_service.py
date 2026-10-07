@@ -117,8 +117,6 @@ class ManifestService:
     def _from_runtime_payload(raw: dict, agent_id: UUID) -> RuntimeManifest:
         model = raw.get("model") or {}
         memory = raw.get("memory") or {}
-        scope_raw = memory.get("scope")
-        scope = AgentMemoryScope(scope_raw) if scope_raw else None
         revision_raw = raw.get("revisionId")
         manifest = RuntimeManifest(
             agent_id=UUID(str(raw.get("agentId") or agent_id)),
@@ -148,12 +146,7 @@ class ManifestService:
                 )
                 for kb in raw.get("knowledgeBases") or []
             ],
-            memory=MemoryConfig(
-                enabled=bool(memory.get("enabled")),
-                scope=scope,
-                retention=memory.get("retention"),
-                instructions=memory.get("instructions"),
-            ),
+            memory=MemoryConfig.model_validate(memory) if memory else MemoryConfig(),
             manifest_hash=raw.get("manifestHash") or "",
             revision_id=UUID(str(revision_raw)) if revision_raw else None,
         )

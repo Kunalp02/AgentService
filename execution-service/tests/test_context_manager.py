@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent_execution.core.exceptions import ServiceError
-from agent_execution.schemas.runtime import ModelConfig, RuntimeManifest
+from agent_execution.schemas.runtime import MemoryConfig, ModelConfig, RuntimeManifest
 from agent_execution.services.context_budget import ContextBudget
 from agent_execution.services.context_manager import ContextManager
 
@@ -19,6 +19,8 @@ def _settings(**overrides):
         "context_chars_per_token": 4.0,
         "context_tool_round_reserve_tokens": 1000,
         "context_tool_message_max_chars": 500,
+        "conversation_max_turn_pairs": 10,
+        "conversation_max_chars": 8000,
     }
     base.update(overrides)
     settings = SimpleNamespace(**base)
@@ -52,13 +54,36 @@ def test_pack_system_context_trims_knowledge_before_history():
     packed = manager.pack_system_context(
         manifest,
         budget=manager.budget_for_thread(session_id="sess"),
-        memory_block="Previous conversation (most recent last):\n" + ("User: hi\n" * 40),
+        memory_cfg=MemoryConfig(enabled=True, instructions="Remember user preferences."),
+        history_block="Previous conversation (most recent last):\n" + ("User: hi\n" * 40),
         kb_blocks=["KB: A\n" + ("claim " * 200), "KB: B\nsmall"],
         artifact_block=None,
         user_input="What is the policy?",
     )
     assert "KB: B" in packed.system_prompt or "KB: A" not in packed.system_prompt
     assert packed.trim_traces
+
+
+def test_pack_system_context_skips_memory_when_disabled():
+    manager = ContextManager(_settings())
+    manifest = RuntimeManifest(
+        agent_id=uuid.uuid4(),
+        name="Agent",
+        status="Published",
+        system_prompt="Base.",
+        model=ModelConfig(model_id=uuid.uuid4(), model_identifier="gpt-4o-mini"),
+    )
+    packed = manager.pack_system_context(
+        manifest,
+        budget=manager.budget_for_thread(session_id="sess"),
+        memory_cfg=MemoryConfig(enabled=False, instructions="ignored"),
+        history_block="Previous conversation:\nUser: secret",
+        kb_blocks=[],
+        artifact_block=None,
+        user_input="Hi",
+    )
+    assert "secret" not in packed.system_prompt
+    assert "ignored" not in packed.system_prompt
 
 
 def test_fit_messages_truncates_tool_content_and_drops_old_rounds():

@@ -1,0 +1,15 @@
+ccil-platform-auth
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+httpx>=0.28.0
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+langgraph>=0.2.0
+langchain-core>=0.3.0
+asyncpg>=0.30.0
+cryptography>=43.0.0
+fastmcp>=4.0.0
+
+[dev]
+pytest>=8.3.0
+pytest-asyncio>=0.24.0

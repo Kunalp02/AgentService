@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent_execution.core.exceptions import ServiceError
-from agent_execution.schemas.runtime import RuntimeManifest
+from agent_execution.schemas.runtime import MemoryConfig, RuntimeManifest
 from agent_execution.services.context_budget import ContextBudget
+from agent_execution.services.memory_prompt_policy import MemoryPromptPolicy
 from agent_execution.services.prompt_composition_service import PromptCompositionService
 from agent_execution.settings import Settings
 
@@ -34,8 +35,9 @@ class ContextManager:
     Strategy (similar to common host practice: protect instructions + latest turn,
     trim retrieved context and older tool results first):
       1. Pin agent system prompt and the current user message.
-      2. Trim, in order: file attachments → KB blocks → conversation history (oldest first).
-      3. On multi-step tool loops, cap tool message size then drop oldest assistant/tool groups.
+      2. Apply runtime manifest memory policy (enabled, instructions, retention/limits) before packing.
+      3. Trim, in order: file attachments → KB blocks → conversation history → memory instructions.
+      4. On multi-step tool loops, cap tool message size then drop oldest assistant/tool groups.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -80,15 +82,22 @@ class ContextManager:
         manifest: RuntimeManifest,
         *,
         budget: ContextBudget,
-        memory_block: str | None,
+        memory_cfg: MemoryConfig,
+        history_block: str | None,
         kb_blocks: list[str],
         artifact_block: str | None,
         user_input: str,
     ) -> SystemContextPack:
+        policy = MemoryPromptPolicy.from_manifest(memory_cfg, self._settings)
+        memory_instructions = policy.instructions_block()
+        if not policy.enabled:
+            memory_instructions = None
+            history_block = None
         char_budget = int(budget.input_token_budget * budget.chars_per_token)
         system_prompt, trim_traces = PromptCompositionService.compose_within_budget(
             manifest,
-            memory_block,
+            memory_instructions,
+            history_block,
             kb_blocks,
             artifact_block,
             user_input,

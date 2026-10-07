@@ -99,15 +99,16 @@ class AgentGraphNodes:
         if any(kb.mode.value == "Context" for kb in manifest.knowledge_bases):
             (kb_blocks, retrieved_context), history_parts = await asyncio.gather(
                 self._ctx.rag_service.fetch_context(manifest, user_input, bearer_token),
-                asyncio.to_thread(self._ctx.memory_service.history_for_prompt, history),
+                asyncio.to_thread(
+                    self._ctx.memory_service.history_for_prompt, history, memory_cfg
+                ),
             )
             history_block, history_for_prompt, history_truncated = history_parts
         else:
             history_block, history_for_prompt, history_truncated = (
-                self._ctx.memory_service.history_for_prompt(history)
+                self._ctx.memory_service.history_for_prompt(history, memory_cfg)
             )
 
-        instructions = ConversationMemoryService.optional_instructions_block(memory_cfg)
         thread_id = state.get("thread_id")
         context_budget = self._ctx.context_manager.budget_for_thread(
             thread_id=str(thread_id) if thread_id else None,
@@ -116,7 +117,8 @@ class AgentGraphNodes:
         packed = self._ctx.context_manager.pack_system_context(
             manifest,
             budget=context_budget,
-            memory_block=_join_blocks(instructions, history_block),
+            memory_cfg=memory_cfg,
+            history_block=history_block,
             kb_blocks=kb_blocks,
             artifact_block=artifact_block,
             user_input=user_input,

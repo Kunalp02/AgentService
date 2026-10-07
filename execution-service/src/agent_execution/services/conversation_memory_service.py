@@ -7,6 +7,7 @@ from agent_execution.infrastructure.conversation_store.base import ConversationH
 from agent_execution.infrastructure.conversation_store.errors import ConversationVersionConflict
 from agent_execution.infrastructure.conversation_store.session_key import ConversationSessionKey
 from agent_execution.schemas.runtime import AgentMemoryScope, MemoryConfig
+from agent_execution.services.memory_prompt_policy import MemoryPromptPolicy
 from agent_execution.services.conversation_models import ConversationHistory, MemoryContext
 from agent_execution.services.memory_cache import MemoryCache, MemoryCacheKey
 from agent_execution.settings import Settings
@@ -64,13 +65,20 @@ class ConversationMemoryService:
         cache_key = self._cache_key(session_key)
         cached = self._cache.get(cache_key)
         expected_version = cached.version if cached else None
+        policy = MemoryPromptPolicy.from_manifest(memory, self._settings)
+        max_turn_pairs = (
+            policy.max_turn_pairs if policy.enabled else self._settings.conversation_max_turn_pairs
+        )
+        max_chars = (
+            policy.max_history_chars if policy.enabled else self._settings.conversation_max_chars
+        )
         try:
             history, version, _ = await self._store.append_exchange(
                 session_key,
                 user_text,
                 assistant_text,
-                max_turn_pairs=self._settings.conversation_max_turn_pairs,
-                max_chars=self._settings.conversation_max_chars,
+                max_turn_pairs=max_turn_pairs,
+                max_chars=max_chars,
                 expected_version=expected_version,
             )
         except ConversationVersionConflict:
@@ -93,10 +101,15 @@ class ConversationMemoryService:
             logger.exception("Conversation history append failed for agent %s", agent_id)
             return False
 
-    def history_for_prompt(self, history: ConversationHistory) -> tuple[str | None, ConversationHistory, bool]:
+    def history_for_prompt(
+        self, history: ConversationHistory, memory: MemoryConfig
+    ) -> tuple[str | None, ConversationHistory, bool]:
+        policy = MemoryPromptPolicy.from_manifest(memory, self._settings)
+        if not policy.enabled:
+            return None, ConversationHistory(), False
         trimmed, truncated = history.trim(
-            self._settings.conversation_max_turn_pairs,
-            self._settings.conversation_max_chars,
+            policy.max_turn_pairs,
+            policy.max_history_chars,
         )
         if not trimmed.turns:
             return None, trimmed, truncated

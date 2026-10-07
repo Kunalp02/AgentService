@@ -129,10 +129,14 @@ class KnowledgeBaseRef(BaseModel):
 
 
 class MemoryConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     enabled: bool = False
     scope: AgentMemoryScope | None = None
     retention: str | None = None
     instructions: str | None = None
+    max_turn_pairs_in_prompt: int | None = Field(default=None, alias="maxTurnPairsInPrompt")
+    max_chars_in_prompt: int | None = Field(default=None, alias="maxCharsInPrompt")
 
 
 class ModelConfig(BaseModel):
