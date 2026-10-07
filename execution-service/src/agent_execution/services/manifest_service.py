@@ -13,6 +13,7 @@ from agent_execution.schemas.runtime import (
     AgentToolRef,
     KnowledgeBaseMode,
     KnowledgeBaseRef,
+    McpConnectionConfig,
     MemoryConfig,
     ModelConfig,
     RuntimeManifest,
@@ -136,14 +137,9 @@ class ManifestService:
                 base_url=model.get("baseUrl"),
                 group_ids=[UUID(str(g)) for g in model.get("groupIds") or []],
             ),
-            tools=[
-                AgentToolRef(
-                    tool_id=UUID(str(t["toolId"])),
-                    tool_name=t.get("toolName"),
-                    tool_type=ToolType(t.get("toolType", "Remote")),
-                )
-                for t in raw.get("tools") or []
-            ],
+            tools=[AgentToolRef.model_validate(t) for t in raw.get("tools") or []],
+            mcp_connections=ManifestService._parse_mcp_connections(raw),
+            local_mcp_connection=ManifestService._parse_local_mcp_connection(raw),
             knowledge_bases=[
                 KnowledgeBaseRef(
                     knowledge_base_id=UUID(str(kb["knowledgeBaseId"])),
@@ -164,6 +160,35 @@ class ManifestService:
         if not manifest.manifest_hash:
             manifest.manifest_hash = _hash_manifest(manifest)
         return manifest
+
+    @staticmethod
+    def _parse_mcp_connections(raw: dict) -> dict[str, McpConnectionConfig]:
+        connections_raw = raw.get("mcpConnections")
+        if not connections_raw:
+            return {}
+        if isinstance(connections_raw, dict):
+            return {
+                str(key): McpConnectionConfig.model_validate(value)
+                for key, value in connections_raw.items()
+            }
+        if isinstance(connections_raw, list):
+            mapped: dict[str, McpConnectionConfig] = {}
+            for item in connections_raw:
+                conn = McpConnectionConfig.model_validate(item)
+                conn_id = conn.connection_id
+                if conn_id is None and isinstance(item, dict):
+                    conn_id = item.get("connectionId") or item.get("id")
+                if conn_id is not None:
+                    mapped[str(conn_id)] = conn
+            return mapped
+        return {}
+
+    @staticmethod
+    def _parse_local_mcp_connection(raw: dict) -> McpConnectionConfig | None:
+        local = raw.get("localMcpConnection")
+        if not local:
+            return None
+        return McpConnectionConfig.model_validate(local)
 
     @staticmethod
     def _build_manifest(
@@ -225,7 +250,16 @@ def _hash_manifest(manifest: RuntimeManifest) -> str:
             "system_prompt": manifest.system_prompt,
             "temperature": manifest.temperature,
             "model": manifest.model.model_identifier,
-            "tools": [t.model_dump(mode="json") for t in manifest.tools],
+            "tools": [t.model_dump(mode="json", by_alias=True) for t in manifest.tools],
+            "mcp_connections": {
+                key: value.model_dump(mode="json", by_alias=True)
+                for key, value in manifest.mcp_connections.items()
+            },
+            "local_mcp": (
+                manifest.local_mcp_connection.model_dump(mode="json", by_alias=True)
+                if manifest.local_mcp_connection
+                else None
+            ),
             "kbs": [k.model_dump(mode="json") for k in manifest.knowledge_bases],
             "memory": manifest.memory.model_dump(mode="json"),
             "status": manifest.status,
