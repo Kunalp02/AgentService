@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     conversation_max_turn_pairs: int = 10
     conversation_max_chars: int = 8000
     max_tool_rounds: int = 5
+    local_mcp_url: str = ""
+    mcp_client_cache_ttl_seconds: int = 300
+    mcp_tool_timeout_seconds: float = 120.0
 
     execution_database_url: str = ""
     conversation_store_database_url: str = ""
