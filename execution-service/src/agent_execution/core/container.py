@@ -11,9 +11,6 @@ from agent_execution.infrastructure.auth.service_token_provider import (
 from agent_execution.infrastructure.conversation_store.factory import (
     create_conversation_history_store,
 )
-from agent_execution.infrastructure.conversation_store.postgres_store import (
-    PostgresConversationHistoryStore,
-)
 from agent_execution.infrastructure.http_pool import HttpClientPool
 from agent_execution.infrastructure.persistence.database import Database
 from agent_execution.infrastructure.persistence.deployment_repository import (
@@ -25,6 +22,7 @@ from agent_execution.infrastructure.persistence.thread_repository import (
 )
 from agent_execution.infrastructure.platform.platform_clients import PlatformClients
 from agent_execution.services.agent_execution_service import AgentExecutionService
+from agent_execution.services.audit_service import AuditService
 from agent_execution.services.cleanup_service import CleanupService
 from agent_execution.services.deployment_service import DeploymentService
 from agent_execution.services.run_slots import RunSlots
@@ -32,7 +30,6 @@ from agent_execution.services.storage_client import StorageClient
 from agent_execution.services.thread_service import ThreadService
 from agent_execution.services.worker import ExecutionWorker
 from agent_execution.settings import Settings
-from agent_execution.services.audit_service import AuditService
 
 
 @dataclass
@@ -52,6 +49,7 @@ class ApplicationContainer:
     execution_service: AgentExecutionService = field(init=False)
     cleanup_service: CleanupService = field(init=False)
     worker: ExecutionWorker = field(init=False)
+    audit_service: AuditService = field(init=False)
 
     def __post_init__(self) -> None:
         self.database = Database(self.settings.database_url())
@@ -87,8 +85,6 @@ class ApplicationContainer:
             self.runs,
             RunSlots(self.settings),
         )
-        if not isinstance(conversations, PostgresConversationHistoryStore):
-            raise RuntimeError("Conversation history must use the execution database.")
         self.cleanup_service = CleanupService(
             self.threads, self.runs, conversations, storage
         )
@@ -96,16 +92,6 @@ class ApplicationContainer:
             self.settings, self.runs, self.execution_service, self.cleanup_service
         )
         self.audit_service = AuditService(self.runs, self.thread_service)
-        if not isinstance(conversations, PostgresConversationHistoryStore):
-            raise RuntimeError("Conversation history must use the execution database.")
-        self.cleanup_service = CleanupService(
-            self.threads, self.runs, conversations, storage
-        )
-        self.worker = ExecutionWorker(
-            self.settings, self.runs, self.execution_service, self.cleanup_service
-        )
-        self.audit_service = AuditService(self.runs, self.thread_service)
-
         self.deployment_service = DeploymentService(
             self.deployments,
             self.graph_context.manifest_service,

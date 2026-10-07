@@ -107,27 +107,6 @@ class RunResult(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-# class CreateDeploymentRequest(BaseModel):
-#     model_config = ConfigDict(populate_by_name=True)
-
-#     slug: str
-#     revision_id: UUID | None = Field(default=None, alias="revisionId")
-#     retention_policy: str = Field(default="PERMANENT", alias="retentionPolicy")
-
-
-# class DeploymentResponse(BaseModel):
-#     model_config = ConfigDict(populate_by_name=True)
-
-#     deployment_id: UUID = Field(alias="deploymentId")
-#     agent_id: UUID = Field(alias="agentId")
-#     slug: str
-#     revision_id: UUID | None = Field(default=None, alias="revisionId")
-#     retention_policy: str = Field(alias="retentionPolicy")
-#     enabled: bool
-#     created_at: datetime = Field(alias="createdAt")
-#     api_key: str | None = Field(default=None, alias="apiKey")
-
-
 class CreateDeploymentRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

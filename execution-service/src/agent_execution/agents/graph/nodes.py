@@ -108,39 +108,6 @@ class AgentGraphNodes:
                 self._ctx.memory_service.history_for_prompt(history)
             )
 
-        # instructions = ConversationMemoryService.optional_instructions_block(memory_cfg)
-        # system_prompt = PromptCompositionService.compose(
-        #     manifest,
-        #     _join_blocks(instructions, history_block),
-        #     kb_blocks,
-        #     artifact_block,
-        # )
-        # return {
-        #     "session_id": session_id,
-        #     "manifest": manifest.model_dump(mode="json"),
-        #     "system_prompt": system_prompt,
-        #     "llm_input": user_input,
-        #     "messages": [
-        #         {"role": "system", "content": system_prompt},
-        #         {"role": "user", "content": user_input},
-        #     ],
-        #     "history_turns": [
-        #         {"role": turn.role, "content": turn.content} for turn in history.turns
-        #     ],
-        #     "memory_scope": memory_cfg.scope.value if memory_cfg.scope else None,
-        #     "history_total_turns": len(history.turns),
-        #     "history_turns_in_prompt": len(history_for_prompt.turns),
-        #     "history_truncated": history_truncated,
-        #     "has_tools": manifest.has_tools,
-        #     "tool_round": 0,
-        #     "max_tool_rounds": self._ctx.settings.max_tool_rounds,
-        #     "tool_calls": [],
-        #     "tool_results": [],
-        #     "retrieved_context": retrieved_context,
-        #     "artifact_block": artifact_block,
-        #     "stop_reason": None,
-        #     "steps": ["prepare_context"],
-        # }
         instructions = ConversationMemoryService.optional_instructions_block(memory_cfg)
         system_prompt, trim_steps = PromptCompositionService.compose_within_budget(
             manifest,
@@ -255,13 +222,6 @@ class AgentGraphNodes:
             messages.append(
                 {"role": "tool", "tool_call_id": item["id"], "content": item["output"]}
             )
-        # return {
-        #     "messages": messages,
-        #     "tool_calls": [],
-        #     "tool_results": list(state.get("tool_results") or []) + executed,
-        #     "tool_round": tool_round,
-        #     "steps": [f"run_tools:r{tool_round}"],
-        # }
         return {
             "messages": messages,
             "tool_calls": [],

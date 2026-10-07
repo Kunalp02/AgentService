@@ -4,7 +4,7 @@ import logging
 
 from agent_execution.core.exceptions import ServiceError
 from agent_execution.infrastructure.conversation_store.base import ConversationHistoryStore
-from agent_execution.infrastructure.conversation_store.memory_store import ConversationVersionConflict
+from agent_execution.infrastructure.conversation_store.errors import ConversationVersionConflict
 from agent_execution.infrastructure.conversation_store.session_key import ConversationSessionKey
 from agent_execution.schemas.runtime import AgentMemoryScope, MemoryConfig
 from agent_execution.services.conversation_models import ConversationHistory, MemoryContext

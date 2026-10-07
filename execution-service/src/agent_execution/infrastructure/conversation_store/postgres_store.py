@@ -4,7 +4,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-from agent_execution.infrastructure.conversation_store.memory_store import ConversationVersionConflict
+from agent_execution.infrastructure.conversation_store.errors import ConversationVersionConflict
 from agent_execution.infrastructure.conversation_store.session_key import ConversationSessionKey
 from agent_execution.infrastructure.persistence.database import Database
 from agent_execution.services.conversation_models import ConversationHistory, ConversationTurn

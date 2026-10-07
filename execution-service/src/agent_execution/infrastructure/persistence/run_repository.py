@@ -229,45 +229,6 @@ class RunRepository:
                 lease_seconds,
             )
 
-    # async def mark_succeeded(
-    #     self,
-    #     run_id: UUID,
-    #     *,
-    #     output: str,
-    #     output_artifact_ids: list[str],
-    #     steps: list[str],
-    #     retrieved_context: list,
-    #     stop_reason: str | None,
-    #     manifest_hash: str,
-    #     revision_id: UUID | None,
-    # ) -> None:
-    #     pool = await self._database.pool()
-    #     async with pool.acquire() as conn:
-    #         await conn.execute(
-    #             """
-    #             UPDATE runs
-    #             SET status = 'SUCCEEDED',
-    #                 output = $2,
-    #                 output_artifact_ids = $3::jsonb,
-    #                 steps = $4::jsonb,
-    #                 retrieved_context = $5::jsonb,
-    #                 stop_reason = $6,
-    #                 manifest_hash = $7,
-    #                 revision_id = COALESCE($8, revision_id),
-    #                 completed_at = $9,
-    #                 lease_expires_at = NULL
-    #             WHERE run_id = $1
-    #             """,
-    #             run_id,
-    #             output,
-    #             json.dumps(output_artifact_ids),
-    #             json.dumps(steps),
-    #             json.dumps(retrieved_context),
-    #             stop_reason,
-    #             manifest_hash,
-    #             revision_id,
-    #             datetime.now(timezone.utc),
-    #         )
     async def mark_succeeded(
         self,
         run_id,

@@ -2,19 +2,17 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, Header
-
+from fastapi import Depends, Header, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from platform_auth import AuthError, PlatformPrincipal
 
 from agent_execution.core.container import ApplicationContainer, get_container
 from agent_execution.core.exceptions import ServiceError
 from agent_execution.services.agent_execution_service import AgentExecutionService
+from agent_execution.services.audit_service import AuditService
 from agent_execution.services.deployment_service import DeploymentService
 from agent_execution.services.thread_service import ThreadService
 from agent_execution.settings import Settings, get_settings
-from fastapi import Depends, Request
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from agent_execution.services.audit_service import AuditService
 
 bearer_scheme = HTTPBearer(
     auto_error=False, description="Platform JWT (paste without the 'Bearer ' prefix)"
@@ -43,16 +41,6 @@ def get_deployment_service(
     container: Annotated[ApplicationContainer, Depends(get_app_container)],
 ) -> DeploymentService:
     return container.deployment_service
-
-
-# async def get_platform_principal(
-#     container: Annotated[ApplicationContainer, Depends(get_app_container)],
-#     authorization: Annotated[str | None, Header()] = None,
-# ) -> PlatformPrincipal:
-#     try:
-#         return await container.platform_auth.authenticate(authorization)
-#     except AuthError as exc:
-#         raise ServiceError(exc.code, exc.message, exc.status_code) from exc
 
 
 async def get_platform_principal(

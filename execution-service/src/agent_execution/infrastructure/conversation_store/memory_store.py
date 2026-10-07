@@ -3,14 +3,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
+from agent_execution.infrastructure.conversation_store.errors import ConversationVersionConflict
 from agent_execution.infrastructure.conversation_store.session_key import ConversationSessionKey
 from agent_execution.services.conversation_models import ConversationHistory
-
-
-class ConversationVersionConflict(Exception):
-    def __init__(self, current_version: int) -> None:
-        self.current_version = current_version
-        super().__init__(f"conversation version conflict (current={current_version})")
 
 
 @dataclass
