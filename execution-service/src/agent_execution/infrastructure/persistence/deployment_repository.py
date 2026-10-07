@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from uuid import UUID
+
+from agent_execution.infrastructure.persistence.database import Database
+
+
+class DeploymentRepository:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def insert(
+        self,
+        *,
+        deployment_id,
+        agent_id,
+        slug,
+        revision_id,
+        api_key_hash,
+        api_key_enc,
+        retention_policy,
+    ) -> None:
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO deployments (
+                    deployment_id, agent_id, slug, revision_id,
+                    api_key_hash, api_key_enc, retention_policy, created_at
+                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                """,
+                deployment_id,
+                agent_id,
+                slug,
+                revision_id,
+                api_key_hash,
+                api_key_enc,
+                retention_policy,
+                datetime.now(timezone.utc),
+            )
+
+    async def get_by_slug(self, slug: str):
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            return await conn.fetchrow(
+                "SELECT * FROM deployments WHERE slug = $1",
+                slug,
+            )
+
+    async def get_by_api_key_hash(self, api_key_hash: str):
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            return await conn.fetchrow(
+                "SELECT * FROM deployments WHERE api_key_hash = $1 AND enabled = TRUE",
+                api_key_hash,
+            )
+
+    async def list_for_agent(self, agent_id: UUID):
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            return await conn.fetch(
+                """
+                SELECT * FROM deployments
+                WHERE agent_id = $1
+                ORDER BY created_at DESC
+                """,
+                agent_id,
+            )
+
+    async def get_by_agent(self, agent_id):
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            return await conn.fetchrow(
+                "SELECT * FROM deployments WHERE agent_id = $1 "
+                "ORDER BY created_at DESC LIMIT 1",
+                agent_id,
+            )
+
+    async def rotate_key(self, deployment_id, api_key_hash, api_key_enc) -> None:
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE deployments SET api_key_hash = $2, api_key_enc = $3 "
+                "WHERE deployment_id = $1",
+                deployment_id,
+                api_key_hash,
+                api_key_enc,
+            )
