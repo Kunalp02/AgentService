@@ -18,7 +18,7 @@ import {
 import { usePlatform } from '../../context/PlatformContext';
 import { RolePermissionKey } from '../../types';
 import { PERMISSIONS } from '../../config/permissions';
-import { useGetAgentsQuery } from '../../store/agentApi';
+import DarkLogo from "../../assets/images/ccilLogo-dark.png";
 export const Sidebar: React.FC = () => {
   const {
      theme,
@@ -27,18 +27,13 @@ export const Sidebar: React.FC = () => {
   setActiveView,
   pendingRegistrations,
   localTools,
+  agents,
   knowledgeBases,
   hasPermission,
   currentRole,
   currentUser,
   canAccessView,   // <-- this was missing, causing the ReferenceError / blank screen
 } = usePlatform();
-  const canViewAgents = hasPermission(PERMISSIONS.Agent.View);
-  const { data: agentSummary } = useGetAgentsQuery(
-    { page: 1, pageSize: 1 },
-    { skip: !canViewAgents },
-  );
-  const agentCount = agentSummary?.totalCount ?? 0;
 
   const pendingToolsCount = localTools.filter((t) => String(t.status || '').toLowerCase() === 'pendingapproval').length;
 
@@ -114,7 +109,7 @@ export const Sidebar: React.FC = () => {
           label: 'Agent Studio',
           icon: Bot,
           permission: PERMISSIONS.Agent.View,
-          badge: agentCount,
+          badge: agents.length,
           badgeColor: 'bg-purple-500/20 text-purple-300',
         },
         {
@@ -181,10 +176,7 @@ export const Sidebar: React.FC = () => {
             title={`Role code: ${currentRole?.code}`}
           />
         </div>
-        <div className='text-xs flex items-center justify-center mt-2'>
-          Powered by
-          <span className='ml-2 px-1.5 py-0.5 rounded bg-slate-700/70 text-[10px] font-semibold tracking-wide'>CCIL</span>
-        </div>
+        <div className='text-xs flex item-center justify-center mt-2'>Powerd by <img src={DarkLogo} className='ml-2' width={40}/></div>
       </div>
     </aside>
   );

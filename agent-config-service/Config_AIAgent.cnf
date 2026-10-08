@@ -1,0 +1,143 @@
+// Config_AIAgent.cnf
+
+
+<AppConfig ENCRYPTFLAG="N">
+	<Configuration type="DATASERVICE" key="AIPOCDB">
+		<CONNECTIONSTRING Value="Server=172.19.18.148;Port=6544;User Id=webrtlccig01s4;Password=webrtlccig01s4;Database=WEBRTLCCIG01S4;Keepalive=300;include error detail=true" />
+		<PLACEHOLDER Value=":"/>
+		<NAME Value="PGSQL, Managed Driver" />
+		<PROVIDER Value="Npgsql" />
+		<INVARIANT Value="Npgsql," />
+		<DESCRIPTION Value="PostgreSQL Data Provider for .NET, Managed Driver" />
+		<QUERYFILE Value="Queries.hdb"/>
+		<TYPE Value="Npgsql.NpgsqlFactory, Npgsql, Version=6.0.0, Culture=neutral, PublicKeyToken=5d8b90d52f46fda7" />
+		<ORACLEBINDBYNAME Value="0"/>
+		<MaxConnectionCount Value="100"/>
+		<SYSTEMINDICATOR Value="WIN"/>
+		<ENVIRONMENT Value="Prod"/>
+		<DBUSER Value="GP1US03U"/>
+	</Configuration>
+	
+	<Configuration type="APPDATA" key="CLIAPPDATA">
+		<MEMBERNO Value="99998" />
+		<USERNO Value="U1720" />
+		<INSTANCE Value="1720" />
+		<CONNECTIONID Value="99998" />
+		<CONNECTIONIP Value="172.19.204.28" />
+		<LUDDNUMBER Value="50172" />
+		<ENVIRONMENT Value="Prod" />
+		<SYSTEM Value="NDS-OM" />
+		<SYSTEMINDICATOR Value="M" />
+		<VERSION Value="V1.1.3" />
+		<LOGGERMODE Value="verbose" />
+		<ISTWIDDLING Value="0" />
+		<APPPARAM>
+			<PARAM Key="ISQUERYRELAYINUSE" Value="1" />/>
+			<PARAM Key="LUDDNO" Value="50172" />
+			<PARAM Key="SYSTEMINDICATOR" Value="M" />
+			<PARAM Key="VERSION" Value="5.0.0" />
+		</APPPARAM>
+		<JSONCONFIG>
+            {
+            "apiURLs": {
+                "GoogleAPIURL": "https://www.google.com/recaptcha/api/siteverify"
+            },
+            "ToolsConfigService":{
+                "BaseUrl": "http://172.19.204.37:8502"
+            },
+            "RagConfigService": {
+                "BaseUrl": "http://172.19.204.37:8503"
+            },
+			"apiConfig": {
+			"useExceptionHandler": "",
+			"useMetrics": "1",
+			"serviceName": "Auth",
+			"SSOSecretKey": "Z2cICR+3ZYdSDhhMQg0QGbJNneHgQxJD3Z70jD0/sT8=",
+			"SSOSecretIV": "WGa6iJpyuiHVITMFXau9HQ==",
+			"APIKey": "AAKCAQEAw2IKRU7io",
+			},
+			"jwt": {
+			"secretKey": "jwt:jwtCache",
+			"expiryMinutes": "300",
+			"issuer": "https://www.ccilonline.co.in",
+			"validateLifetime": true,
+			"validateSession": true,
+			"jwtCache": {
+			"RedisConnectionString": "172.19.204.37:6666",
+			"RedisCacheId": "1",
+			"JWTKey": "JWTSecretKey",
+			"JWTUpdateKey": true,
+			"JWTKeyValue": "MIIEowIBAAKCAQEAw2IKRU7io+lAO3fN+da75AvAUR4Sc69cPloeU6Z7aOerGAqfq5ML2aPKOfToWVVQwVNZRaqGcaoTyKJqXf9c3BqNxtjwFQv9/wK7DSTD4JLAjeL2kOOoiBFN0YfRx/uq22VHYn4R0pqnCfn68paTgJwqGoYDojGatOnvv6E4HOAL4VGMic9CQIMJOKw5LvWnhyrl+DQzArzY9BUBZ47NF29dFnT+HBq/1LAmKx/BASagmpljoVv+J8VEvY043BKdZ9/rfqT8QAClIGdd6pyTOf8BQhPDLr6zFmA8NQous6puk5FE5hRN73v1LhoZaFvP4ypksd4bZF2lZijAVhxBvwIDAQABAoIBAAdHve47NEK7TENrAWfP0ox6y526KyHYZO2F2h9v0qVkDIIG01BHWGexrLVgJNA/V5T8kBUCd6QAnGAbfS8ndsRU0PeZ2chO/BXmeiXROuNBVJ90148qjHsVefrWvsBe5kzqhzBqViusy5CZmfo0Fibyqrb2S2hdxM/874wKa9bXiY4N+wccbKOX8vHpmN3+Nh6iXbPAK/G3gGZo6dFskSFPvoOb+zEfxtWOB3RFNmEdA91OilRhTiL7329BT9cRE60I8hTYKsWkmq8+KWgnOqOmKC7qxLgdW+bc0gWa2hJfbnvCo0LVKWXQJ4DEl7VJAYfczZTGiePCnn8OZeZgVjECgYEA/TrJgE5lKX36zl88tsMipADIvC95YWgnaVamAzbXcCeQIpB1ZrGIE5oNEsj0NPS0z4ohEFxaSEgk7oZlwp9aUJcV5t/J8PhUFb97VxmD6DZ6WjXzOQZ0tvOXVJqQJ7oMBNtCBtTd8Tj5n+eg7d7V8MlWIsfLZ6eykN4yfxKOKs0CgYEAxYU+V5jFvwWQJAKuvw6ey6plEDFdjNh+Jqk/KmTh3eSrCl5R58+9PS1WcUgaE6rN92YuJGr+guUTm7SqLXGrORht28INnQQ6Qjz7DemPduzKfQB+7TxomBpSj7WkNCJYgUl9vHtlaOvsTigHiGqDtAztogltji8dJdiIbuq9rsCgYB/pvve5yYN5YjiMZY8l1/GBvMqElCA7u03J8vmQOYXjooVMndMPmBXaUf/2Tdp3pWrLXl/ct68I0oix7NSidwQVilfSh7Vj4lrsSwu+xjInXXONfYXIA8EDwWRS50xuZLHe/Pr17DOIieMGUrBvpxglk4KmGcMKLhWWPxhnGv4XQKBgEV9sEY/QGsJOQICU5pyOVnsE+xTgdc4n4FYkBmLpHTjn1yW5yT0L9CQSRPuqTqtdXxhBBZ+Dry/ygLsseUMyo+NwBW0FVKlHiTXbwyTMAJZN//mag7VY0VzbAztpaE8uBhi4lO9khsMzbFdkfDjkHx7A+u7J2kbmESlXrKvMZbAoGBAK6bYwcKAM40Jj5hTzw1qimIU06BZ8XlIY5UuDY1iuj1EubVk/dSZDTppL1Y/xFGJ9jTlBo4ZGSnUexw27SxXyutd2Ki/LQXLKcRzkekWg8ID+ixsdi298A4+w/SVrnINLQqbUIaZVwVS8/US5tlksqOZ0c+dkiavq5dGL3YvKiH"
+			},
+			"sessionCache": {
+			"OTPWait": 2,
+			"RedisConnectionString": "172.19.204.37:6666",
+			"RedisCacheId": "2"
+			},
+			},
+			"Logging": {
+			"LogLevel": {
+			"Default": "Information",
+			"Microsoft.AspNetCore": "Warning",
+			"Microsoft.EntityFrameworkCore": "Warning"
+			}
+			},
+			"Serilog": {
+			"Using": [ "Serilog.Sinks.Console", "Serilog.Sinks.File" ],
+
+			"MinimumLevel": {
+			"Default": "Information",
+			"Override": {
+			"Microsoft": "Error",
+			"System":     "Error"
+			}
+			},
+
+			"WriteTo": [
+			{
+			"Name": "File",
+			"Args": {
+			"path": "Logs/log-.txt",
+			"rollingInterval": "Day",
+			"fileSizeLimitBytes": 10000000,
+			"rollOnFileSizeLimit": true,
+			"retainedFileCountLimit": 7,
+			"outputTemplate": "[{Timestamp:HH:mm:ss}][{Level:u}] {Message:lj}{NewLine}{Exception}"
+			}
+			},
+			]
+			},
+			"AllowedHosts": "*",
+			"ConnectionStrings": {
+                "Postgres": "Host=172.19.204.37;Port=5434;Database=NoCodeAIPlatform;Username=postgres;Password=Tcs@082026;SearchPath=public;Pooling=true;Minimum Pool Size=5;Maximum Pool Size=50",
+                "Redis": "redis:6666,abortConnect=false,connectRetry=3,connectTimeout=5000"
+			},
+			"Bifrost": {
+			"BaseUrl": "http://bifrost.internal.company.com",
+			"ApiKey": "CHANGE_ME",
+			"CodeGenerationModel": "gpt-oss-20b",
+			"CodeAuditModel": "gemma2-27b-it",
+			"RequestTimeoutSeconds": 60
+			},
+			"Bootstrap": {
+			"SuperAdminWindowsUserId": "kiran.waje",
+			"SuperAdminEmail": "kiran.waje@ccilindia.co.in",
+			"FirstName": "Kiran",
+			"Lastname": "Waje"
+			},
+			"Cors": {
+			"AllowedOrigins": []
+			}
+			}
+
+		</JSONCONFIG>
+	</Configuration>
+	<Configuration type="APPLOGGER" key="APPLOGDATA">
+		<LOGPATH Value="/logs/envp01/authentication/" />
+		<LOGGERMODE Value="VERBOSE" />
+		<EXCEPTIONLOGFILENAME Value="NRIS_Exception" />
+		<GENERALLOGFILENAME Value="NRIS_Info" />
+		<ISGENERALINFOLOGGED Value="1" />
+		<ISEXCEPTIONINFOLOGGED Value="1" />
+	</Configuration>
+</AppConfig>
