@@ -80,33 +80,24 @@ html {
 .background_light,
 .login_background_dark,
 .login_background_light {
-    background-color: #0f172a;
-    background-image:
-        radial-gradient(ellipse at 80% 10%, rgba(79, 70, 229, 0.22), transparent 55%),
-        linear-gradient(135deg, #0f172a 0%, #111827 100%);
+    background-image: url(./assets/images/background_dark.svg);
     background-repeat: no-repeat;
     background-position: 50%;
     background-size: cover;
 }
 
 .background_light {
-    background-color: #f8fafc;
-    background-image:
-        radial-gradient(ellipse at 80% 10%, rgba(129, 140, 248, 0.18), transparent 55%),
-        linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+    background-image: url(./assets/images/background_light.svg);
 }
 
 .login_background_dark {
-    background-image:
-        radial-gradient(ellipse at 50% 0%, rgba(14, 165, 233, 0.18), transparent 60%),
-        linear-gradient(135deg, #0f172a 0%, #020617 100%);
+    background-image: url(./assets/images/login_background_dark.svg);
 }
 
 .login_background_light {
-    background-image:
-        radial-gradient(ellipse at 50% 0%, rgba(99, 102, 241, 0.14), transparent 60%),
-        linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+    background-image: url(./assets/images/login_background_light.svg);
 }
+
 
 .panel-border {
     border-color: rgba(255, 255, 255, 0.1);

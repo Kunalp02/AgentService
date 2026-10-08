@@ -1,0 +1,309 @@
+FRONTEND REMOTE MCP EDITOR — COPY/PASTE
+======================================
+
+Agent editor only. Each remote MCP server is a collapsible row: server name on top, tools underneath when opened.
+No model gateway / apiKey UI change. Save payload stays tools[{ toolId, toolType: "Remote" }].
+
+Apply the snippets in order. Paths are relative to the frontend folder (the one with package.json).
+
+
+==============================================================================
+FILE PATH: src/types/agent.ts
+==============================================================================
+
+ACTION 1: Add these two interfaces after ToolOptionDto, and add remoteMcpServers on AgentEditorOptionsDto.
+
+FIND:
+
+export interface ToolOptionDto {
+  id: string;
+  name: string;
+  toolType: AgentToolType | string;
+  /** Groups this tool is restricted to. Empty = available to every group. */
+  groupIds: string[];
+}
+
+export interface AgentEditorOptionsDto {
+  models: ModelOptionDto[];
+  knowledgeBases: KnowledgeBaseOptionDto[];
+  tools: ToolOptionDto[];
+  availability: {
+    toolsConfigReachable: boolean;
+    ragConfigReachable: boolean;
+  };
+}
+
+REPLACE WITH:
+
+export interface ToolOptionDto {
+  id: string;
+  name: string;
+  toolType: AgentToolType | string;
+  /** Groups this tool is restricted to. Empty = available to every group. */
+  groupIds: string[];
+}
+
+export interface RemoteMcpToolOptionDto {
+  id: string;
+  name: string;
+  description?: string | null;
+}
+
+export interface RemoteMcpServerOptionDto {
+  id: string;
+  name: string;
+  remoteMcpServerUrl?: string | null;
+  transportType?: string | null;
+  authOption?: string | null;
+  groupIds: string[];
+  tools: RemoteMcpToolOptionDto[];
+}
+
+export interface AgentEditorOptionsDto {
+  models: ModelOptionDto[];
+  knowledgeBases: KnowledgeBaseOptionDto[];
+  tools: ToolOptionDto[];
+  remoteMcpServers: RemoteMcpServerOptionDto[];
+  availability: {
+    toolsConfigReachable: boolean;
+    ragConfigReachable: boolean;
+  };
+}
+
+
+ACTION 2: Inside normalizeEditorOptions, read remoteMcpServers from the API payload.
+
+FIND:
+
+  const tools = Array.isArray(raw?.tools ?? raw?.Tools)
+    ? (raw.tools ?? raw.Tools)
+    : [];
+  const availability = raw?.availability ?? raw?.Availability ?? {};
+
+REPLACE WITH:
+
+  const tools = Array.isArray(raw?.tools ?? raw?.Tools)
+    ? (raw.tools ?? raw.Tools)
+    : [];
+  const remoteMcpServers = Array.isArray(
+    raw?.remoteMcpServers ?? raw?.RemoteMcpServers,
+  )
+    ? (raw.remoteMcpServers ?? raw.RemoteMcpServers)
+    : [];
+  const availability = raw?.availability ?? raw?.Availability ?? {};
+
+
+ACTION 3: Inside the object returned by normalizeEditorOptions, add remoteMcpServers after the tools array.
+
+FIND:
+
+      .filter((t: ToolOptionDto) => t.id),
+    availability: {
+
+REPLACE WITH:
+
+      .filter((t: ToolOptionDto) => t.id),
+    remoteMcpServers: remoteMcpServers
+      .map((server: any) => {
+        const id = String(server?.id ?? server?.Id ?? "").trim();
+        if (!id) return null;
+        const nested = Array.isArray(server?.tools ?? server?.Tools)
+          ? (server.tools ?? server.Tools)
+          : [];
+        return {
+          id,
+          name: String(server?.name ?? server?.Name ?? id),
+          remoteMcpServerUrl:
+            server?.remoteMcpServerUrl ?? server?.RemoteMcpServerUrl ?? null,
+          transportType: server?.transportType ?? server?.TransportType ?? null,
+          authOption: server?.authOption ?? server?.AuthOption ?? null,
+          groupIds: asIdList(server?.groupIds ?? server?.GroupIds),
+          tools: nested
+            .map((tool: any) => {
+              const toolId = String(tool?.id ?? tool?.Id ?? "").trim();
+              if (!toolId) return null;
+              return {
+                id: toolId,
+                name: String(tool?.name ?? tool?.Name ?? toolId),
+                description: tool?.description ?? tool?.Description ?? null,
+              };
+            })
+            .filter(Boolean),
+        };
+      })
+      .filter(Boolean) as RemoteMcpServerOptionDto[],
+    availability: {
+
+
+==============================================================================
+FILE PATH: src/components/agents/AgentStudioView.tsx
+==============================================================================
+
+ACTION 0a: Add the chevron icons to the lucide-react import.
+
+FIND:
+
+  Check,
+  Lock,
+
+REPLACE WITH:
+
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Lock,
+
+
+ACTION 0b: Add open/closed state next to modalOpen.
+
+FIND:
+
+  const [modalOpen, setModalOpen] = useState(false);
+
+REPLACE WITH:
+
+  const [modalOpen, setModalOpen] = useState(false);
+  const [openRemoteServerIds, setOpenRemoteServerIds] = useState<string[]>([]);
+
+
+ACTION 1: Replace the remoteTools memo.
+
+FIND:
+
+  const remoteTools = useMemo(
+    () => (options?.tools ?? []).filter((t) => t.toolType === "Remote"),
+    [options],
+  );
+
+REPLACE WITH:
+
+  const remoteServers = useMemo(
+    () => options?.remoteMcpServers ?? [],
+    [options],
+  );
+
+  const remoteTools = useMemo(
+    () =>
+      remoteServers.length > 0
+        ? remoteServers.flatMap((server) =>
+            server.tools.map((tool) => ({
+              id: tool.id,
+              name: tool.name,
+              toolType: "Remote",
+              groupIds: server.groupIds,
+            })),
+          )
+        : (options?.tools ?? []).filter((t) => t.toolType === "Remote"),
+    [options, remoteServers],
+  );
+
+
+ACTION 2: Inside loadOptions, include nested remote tool ids when pruning the form.
+
+FIND:
+
+        const toolIds = new Set((next.tools ?? []).map((t) => t.id));
+
+REPLACE WITH:
+
+        const toolIds = new Set([
+          ...(next.tools ?? []).map((t) => t.id),
+          ...(next.remoteMcpServers ?? []).flatMap((server) =>
+            server.tools.map((tool) => tool.id),
+          ),
+        ]);
+
+
+ACTION 3: Replace the Remote tools checkbox block.
+
+FIND:
+
+                    <div className="space-y-1 max-h-40 overflow-auto rounded-lg border border-slate-800 p-2">
+                      {remoteTools.map((t) => (
+                        <label
+                          key={t.id}
+                          className="flex items-center gap-2 text-[11px] text-slate-300 py-1"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={form.tools.some((x) => x.toolId === t.id)}
+                            onChange={() => toggleTool(t.id, "Remote")}
+                            disabled={readOnly}
+                          />
+
+                          {t.name}
+                        </label>
+                      ))}
+
+                      {remoteTools.length === 0 && (
+
+REPLACE WITH:
+
+                    <div className="space-y-2 max-h-64 overflow-auto rounded-lg border border-slate-800 p-2">
+                      {remoteServers.map((server) => {
+                        const open = openRemoteServerIds.includes(server.id);
+                        const selectedCount = server.tools.filter((t) =>
+                          form.tools.some((x) => x.toolId === t.id),
+                        ).length;
+                        return (
+                          <div key={server.id} className="rounded-md border border-slate-800">
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[11px] font-semibold text-slate-200 bg-slate-900/60"
+                              onClick={() =>
+                                setOpenRemoteServerIds((current) =>
+                                  current.includes(server.id)
+                                    ? current.filter((id) => id !== server.id)
+                                    : [...current, server.id],
+                                )
+                              }
+                            >
+                              {open ? (
+                                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                              ) : (
+                                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                              )}
+                              <span className="min-w-0 flex-1 truncate">{server.name}</span>
+                              <span className="text-[10px] font-medium text-slate-500">
+                                {selectedCount}/{server.tools.length}
+                              </span>
+                            </button>
+                            {open && (
+                              <div className="space-y-1 border-t border-slate-800 p-2">
+                                {server.tools.map((t) => (
+                                  <label
+                                    key={t.id}
+                                    className="flex items-center gap-2 text-[11px] text-slate-300 py-1"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={form.tools.some((x) => x.toolId === t.id)}
+                                      onChange={() => toggleTool(t.id, "Remote")}
+                                      disabled={readOnly}
+                                    />
+                                    {t.name}
+                                  </label>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+
+                      {remoteServers.length === 0 &&
+                        remoteTools.map((t) => (
+                          <label
+                            key={t.id}
+                            className="flex items-center gap-2 text-[11px] text-slate-300 py-1"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={form.tools.some((x) => x.toolId === t.id)}
+                              onChange={() => toggleTool(t.id, "Remote")}
+                              disabled={readOnly}
+                            />
+                            {t.name}
+                          </label>
+                        ))}
+
+                      {remoteTools.length === 0 && (

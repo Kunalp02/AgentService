@@ -1,24 +1,14 @@
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { AlertTriangle, Bot } from "lucide-react";
+import { usePlatform } from "../../context/PlatformContext";
 import { executionApi } from "../../api/execution";
-import { useGetAgentsQuery } from "../../store/agentApi";
 
 export const PlaygroundView: React.FC = () => {
-  const {
-    currentData: agentResult,
-    isLoading: agentsLoading,
-    isError: agentsError,
-  } = useGetAgentsQuery({ page: 1, pageSize: 200 });
-  const agents = agentResult?.items ?? [];
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  useEffect(() => {
-    if (!agents.some((agent) => agent.id === selectedAgentId)) {
-      setSelectedAgentId(agents[0]?.id ?? null);
-    }
-  }, [agents, selectedAgentId]);
+  const { agents, selectedPlaygroundAgentId, setSelectedPlaygroundAgentId } =
+    usePlatform();
   const active =
-    agents.find((agent) => agent.id === selectedAgentId) || agents[0];
+    agents.find((a) => a.id === selectedPlaygroundAgentId) || agents[0];
   const [message, setMessage] = useState("");
   const [threadId, setThreadId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -73,19 +63,13 @@ export const PlaygroundView: React.FC = () => {
         <select
           value={active?.id || ""}
           onChange={(e) => {
-            setSelectedAgentId(e.target.value || null);
+            setSelectedPlaygroundAgentId(e.target.value || null);
             setThreadId("");
             setTurns([]);
           }}
           className="w-full bg-slate-800 rounded-lg p-2 text-xs text-white"
         >
-          {agentsLoading && agents.length === 0 && (
-            <option value="">Loading agents…</option>
-          )}
-          {agentsError && agents.length === 0 && (
-            <option value="">Could not load agents</option>
-          )}
-          {!agentsLoading && !agentsError && agents.length === 0 && (
+          {agents.length === 0 && (
             <option value="">No agents returned by backend</option>
           )}
           {agents.map((a) => (
@@ -100,12 +84,6 @@ export const PlaygroundView: React.FC = () => {
           </div>
         )}
       </div>
-
-      {agentsError && (
-        <div className="p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-xs text-amber-200">
-          Could not load the agent list. Try refreshing the page.
-        </div>
-      )}
 
       <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3 min-h-40">
         {turns.length === 0 && (

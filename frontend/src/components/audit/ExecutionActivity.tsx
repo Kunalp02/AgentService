@@ -1,38 +1,22 @@
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Activity } from "lucide-react";
 import { usePlatform } from "../../context/PlatformContext";
 import { ActivityRun, executionApi } from "../../api/execution";
-import { PERMISSIONS } from "../../config/permissions";
-import { useGetAgentsQuery } from "../../store/agentApi";
 
 export const ExecutionActivity: React.FC = () => {
-  const { theme, hasPermission } = usePlatform();
-  const canViewAgents = hasPermission(PERMISSIONS.Agent.View);
-  const {
-    currentData: agentResult,
-    isLoading: agentsLoading,
-    isError: agentsError,
-  } = useGetAgentsQuery(
-    { page: 1, pageSize: 200 },
-    { skip: !canViewAgents },
-  );
-  const agents = agentResult?.items ?? [];
-  const agentReferences = useMemo(
-    () => agents.map((agent) => ({ id: agent.id, name: agent.name })),
-    [agents],
-  );
+  const { agents, theme } = usePlatform();
   const [rows, setRows] = useState<ActivityRun[]>([]);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<ActivityRun | null>(null);
 
   useEffect(() => {
     let stop = false;
-    if (!canViewAgents || agentsLoading) return;
-
     const load = async () => {
       try {
-        const next = await executionApi.loadActivity(agentReferences);
+        const next = await executionApi.loadActivity(
+          agents.map((agent) => ({ id: agent.id, name: agent.name })),
+        );
         if (!stop) {
           setRows(next);
           setError("");
@@ -54,7 +38,7 @@ export const ExecutionActivity: React.FC = () => {
       stop = true;
       if (timer) clearTimeout(timer);
     };
-  }, [agentReferences, agentsLoading, canViewAgents]);
+  }, [agents]);
 
   const light = theme === "light";
 
@@ -67,9 +51,6 @@ export const ExecutionActivity: React.FC = () => {
       >
         <Activity className="w-4 h-4 text-cyan-400" /> Agent executions
       </h3>
-      {agentsError && (
-        <p className="text-xs text-amber-400">Could not load the agent list.</p>
-      )}
       {error && <p className="text-xs text-amber-400">{error}</p>}
       <div className="overflow-x-auto max-h-80">
         <table className="w-full text-xs">
