@@ -15,6 +15,7 @@ from agent_execution.schemas.runtime import (
     KnowledgeBaseRef,
     MemoryConfig,
     ModelConfig,
+    RemoteMcpServerConfig,
     RuntimeManifest,
     ToolType,
 )
@@ -144,6 +145,7 @@ class ManifestService:
                 )
                 for t in raw.get("tools") or []
             ],
+            remote_mcp_servers=ManifestService._remote_servers(raw),
             knowledge_bases=[
                 KnowledgeBaseRef(
                     knowledge_base_id=UUID(str(kb["knowledgeBaseId"])),
@@ -200,6 +202,7 @@ class ManifestService:
                 )
                 for t in agent.get("tools") or []
             ],
+            remote_mcp_servers=ManifestService._remote_servers(agent),
             knowledge_bases=[
                 KnowledgeBaseRef(
                     knowledge_base_id=UUID(str(kb["knowledgeBaseId"])),
@@ -217,6 +220,43 @@ class ManifestService:
         )
         manifest.manifest_hash = _hash_manifest(manifest)
         return manifest
+
+
+    @staticmethod
+    def _remote_servers(raw: dict) -> list[RemoteMcpServerConfig]:
+        servers: list[RemoteMcpServerConfig] = []
+        for server in raw.get("remoteMcpServers") or []:
+            server_id = server.get("id")
+            if not server_id:
+                continue
+            tools = []
+            for tool in server.get("tools") or []:
+                tool_id = tool.get("toolId") or tool.get("id")
+                if not tool_id:
+                    continue
+                tools.append(
+                    AgentToolRef(
+                        tool_id=UUID(str(tool_id)),
+                        tool_name=tool.get("toolName") or tool.get("name"),
+                        tool_type=ToolType.REMOTE,
+                    )
+                )
+            group_ids = []
+            for group_id in server.get("groupIds") or []:
+                group_ids.append(UUID(str(group_id)))
+            servers.append(
+                RemoteMcpServerConfig(
+                    id=UUID(str(server_id)),
+                    name=server.get("name"),
+                    remote_mcp_server_url=server.get("remoteMcpServerUrl"),
+                    transport_type=server.get("transportType"),
+                    auth_option=server.get("authOption"),
+                    api_key=server.get("apiKey"),
+                    group_ids=group_ids,
+                    tools=tools,
+                )
+            )
+        return servers
 
 
 def _hash_manifest(manifest: RuntimeManifest) -> str:

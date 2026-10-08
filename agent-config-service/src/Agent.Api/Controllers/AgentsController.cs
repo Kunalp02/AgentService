@@ -123,6 +123,7 @@ public class AgentsController : CCILControllerBase
             Models         = options.Models.Where(m => InScope(m.GroupIds)).ToList(),
             KnowledgeBases = options.KnowledgeBases.Where(k => InScope(k.GroupIds)).ToList(),
             Tools          = options.Tools.Where(t => InScope(t.GroupIds)).ToList(),
+            RemoteMcpServers = options.RemoteMcpServers.Where(s => InScope(s.GroupIds)).ToList(),
         });
     }
 

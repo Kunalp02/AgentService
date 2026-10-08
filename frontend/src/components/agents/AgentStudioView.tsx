@@ -123,9 +123,24 @@ export const AgentStudioView: React.FC = () => {
     [options],
   );
 
-  const remoteTools = useMemo(
-    () => (options?.tools ?? []).filter((t) => t.toolType === "Remote"),
+  const remoteServers = useMemo(
+    () => options?.remoteMcpServers ?? [],
     [options],
+  );
+
+  const remoteTools = useMemo(
+    () =>
+      remoteServers.length > 0
+        ? remoteServers.flatMap((server) =>
+            server.tools.map((tool) => ({
+              id: tool.id,
+              name: tool.name,
+              toolType: "Remote",
+              groupIds: server.groupIds,
+            })),
+          )
+        : (options?.tools ?? []).filter((t) => t.toolType === "Remote"),
+    [options, remoteServers],
   );
 
   const localTools = useMemo(
@@ -146,7 +161,12 @@ export const AgentStudioView: React.FC = () => {
 
         const kbIds = new Set((next.knowledgeBases ?? []).map((k) => k.id));
 
-        const toolIds = new Set((next.tools ?? []).map((t) => t.id));
+        const toolIds = new Set([
+          ...(next.tools ?? []).map((t) => t.id),
+          ...(next.remoteMcpServers ?? []).flatMap((server) =>
+            server.tools.map((tool) => tool.id),
+          ),
+        ]);
 
         return {
           ...current,
@@ -990,22 +1010,46 @@ export const AgentStudioView: React.FC = () => {
                       Remote tools
                     </div>
 
-                    <div className="space-y-1 max-h-40 overflow-auto rounded-lg border border-slate-800 p-2">
-                      {remoteTools.map((t) => (
-                        <label
-                          key={t.id}
-                          className="flex items-center gap-2 text-[11px] text-slate-300 py-1"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={form.tools.some((x) => x.toolId === t.id)}
-                            onChange={() => toggleTool(t.id, "Remote")}
-                            disabled={readOnly}
-                          />
-
-                          {t.name}
-                        </label>
+                    <div className="space-y-2 max-h-64 overflow-auto rounded-lg border border-slate-800 p-2">
+                      {remoteServers.map((server) => (
+                        <div key={server.id} className="rounded-md border border-slate-800">
+                          <div className="px-2 py-1 text-[11px] font-semibold text-slate-200 bg-slate-900/60">
+                            {server.name}
+                          </div>
+                          <div className="space-y-1 p-2">
+                            {server.tools.map((t) => (
+                              <label
+                                key={t.id}
+                                className="flex items-center gap-2 text-[11px] text-slate-300 py-1"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={form.tools.some((x) => x.toolId === t.id)}
+                                  onChange={() => toggleTool(t.id, "Remote")}
+                                  disabled={readOnly}
+                                />
+                                {t.name}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
                       ))}
+
+                      {remoteServers.length === 0 &&
+                        remoteTools.map((t) => (
+                          <label
+                            key={t.id}
+                            className="flex items-center gap-2 text-[11px] text-slate-300 py-1"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={form.tools.some((x) => x.toolId === t.id)}
+                              onChange={() => toggleTool(t.id, "Remote")}
+                              disabled={readOnly}
+                            />
+                            {t.name}
+                          </label>
+                        ))}
 
                       {remoteTools.length === 0 && (
                         <div className="text-[11px] text-slate-500 py-2">

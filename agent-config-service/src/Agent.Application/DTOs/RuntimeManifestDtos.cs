@@ -18,6 +18,18 @@ public record RuntimeAgentToolRefDto
         string ToolType
 );
 
+public record RuntimeRemoteMcpToolDto(Guid ToolId, string? ToolName);
+
+public record RuntimeRemoteMcpServerDto(
+        Guid Id,
+        string? Name,
+        string? RemoteMcpServerUrl,
+        string? TransportType,
+        string? AuthOption,
+        string? ApiKey,
+        IReadOnlyCollection<Guid> GroupIds,
+        IReadOnlyList<RuntimeRemoteMcpToolDto> Tools);
+
 public record RuntimeKnowledgeBaseRefDto(
         Guid KnowledgeBaseId,
         string? KnowledgeBaseName,
@@ -41,6 +53,7 @@ public record AgentRuntimeManifestDto(
         double Temperature,
         RuntimeModelConfigDto Model,
         IReadOnlyList<RuntimeAgentToolRefDto> Tools,
+        IReadOnlyList<RuntimeRemoteMcpServerDto> RemoteMcpServers,
         IReadOnlyList<RuntimeKnowledgeBaseRefDto> KnowledgeBases,
         RuntimeMemoryConfigDto Memory,
         string ManifestHash

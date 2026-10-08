@@ -33,11 +33,24 @@ class ToolExecutionService:
             return json.dumps(result.get("evidence", []), ensure_ascii=True)
         tool = ref
         if tool.tool_type == ToolType.REMOTE:
-            # Remote tool: we need to discover the MCP server that hosts this tool.
-            # 1. List all active remote MCP servers.
-            # 2. For each server, fetch its detailed definition (including the tools it provides).
-            # 3. Find the matching tool ID and obtain the server's base URL.
-            # 4. POST the arguments directly to the server.
+            nested = ToolDefinitionService.find_remote_server(manifest, tool.tool_id)
+            if nested is not None:
+                base_url = nested.remote_mcp_server_url
+                if not base_url:
+                    raise ServiceError(
+                        "TOOL_ERROR",
+                        f"Server {nested.id} does not expose a remoteMcpServerUrl.",
+                        400,
+                    )
+                invoke_url = f"{base_url.rstrip('/')}/api/tools/{tool.tool_id}"
+                result = await self._post_to_remote(
+                    invoke_url,
+                    bearer_token,
+                    arguments,
+                    api_key=nested.api_key,
+                    auth_option=nested.auth_option,
+                )
+                return json.dumps(result, ensure_ascii=True)
 
             server = await self._find_server_for_tool(tool.tool_id, bearer_token)
             base_url = server.get("remoteMcpServerUrl")
@@ -47,8 +60,6 @@ class ToolExecutionService:
                     f"Server {server.get('id')} does not expose a remoteMcpServerUrl.",
                     400,
                 )
-            # Construct a simple invoke endpoint. The exact path depends on the remote MCP API;
-            # we assume a generic convention: POST <base_url>/api/tools/{toolId}
             invoke_url = f"{base_url.rstrip('/')}/api/tools/{tool.tool_id}"
             result = await self._post_to_remote(invoke_url, bearer_token, arguments)
             return json.dumps(result, ensure_ascii=True)
@@ -102,7 +113,14 @@ class ToolExecutionService:
             404,
         )
 
-    async def _post_to_remote(self, url: str, bearer_token: str | None, payload: dict) -> Any:
+    async def _post_to_remote(
+        self,
+        url: str,
+        bearer_token: str | None,
+        payload: dict,
+        api_key: str | None = None,
+        auth_option: str | None = None,
+    ) -> Any:
         """POST JSON ``payload`` to ``url`` using a short‑lived ``httpx.AsyncClient``.
 
         This mirrors the behavior of :meth:`BasePlatformClient._post_json` but works
@@ -111,10 +129,13 @@ class ToolExecutionService:
         the platform client is configured otherwise). For the purposes of unit
         testing we keep the client creation simple.
         """
-        token = bearer_token  # In many cases the remote server expects the same token.
         headers = {"Accept": "application/json"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+        if api_key:
+            headers["X-Api-Key"] = api_key
+            if not auth_option or "bearer" in auth_option.lower() or "api" in auth_option.lower():
+                headers["Authorization"] = f"Bearer {api_key}"
+        elif bearer_token:
+            headers["Authorization"] = f"Bearer {bearer_token}"
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 url,

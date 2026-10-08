@@ -133,10 +133,13 @@ public class HttpToolsConfigClientTests
         });
 
         var client = CreateClient(handler);
-        var (reachable, tools) = await client.GetAvailableToolsAsync();
+        var (reachable, servers) = await client.GetActiveRemoteMcpServersAsync();
 
         reachable.Should().BeTrue();
-        tools.Should().ContainSingle(t => t.Id == RemoteToolId && t.ToolType == "Remote" && t.Name == "search");
+        servers.Should().ContainSingle();
+        servers[0].Name.Should().Be("mcp-server");
+        servers[0].Tools.Should().ContainSingle(t => t.Id == RemoteToolId && t.Name == "search");
+        servers[0].ApiKey.Should().BeNull();
     }
 
     private sealed class StubHandler : HttpMessageHandler

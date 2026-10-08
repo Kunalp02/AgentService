@@ -171,6 +171,10 @@ public class AgentService : IAgentService
         var tools = agent.AgentTools
             .Select(t => new RuntimeAgentToolRefDto(t.ToolId, t.ToolNameCache, t.ToolType.ToString()))
             .ToList();
+        var localTools = tools
+            .Where(t => !t.ToolType.Equals("Remote", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var remoteServers = await BuildRemoteMcpServersAsync(agent, ct);
 
         var knowledgeBases = agent.AgentKnowledgeBases
             .Select(kb => new RuntimeKnowledgeBaseRefDto(
@@ -202,7 +206,8 @@ public class AgentService : IAgentService
             agent.SystemPrompt,
             agent.Temperature,
             modelConfig,
-            tools,
+            localTools,
+            remoteServers,
             knowledgeBases,
             memory,
             manifestHash);
@@ -655,16 +660,85 @@ public class AgentService : IAgentService
     {
         var modelsTask = _toolsClient.GetActiveModelsAsync("Chat", ct);
         var toolsTask = _toolsClient.GetAvailableToolsAsync(ct);
+        var remoteTask = _toolsClient.GetActiveRemoteMcpServersAsync(ct);
         var kbsTask = _ragClient.GetAvailableKnowledgeBasesAsync(ct);
-        await Task.WhenAll(modelsTask, toolsTask, kbsTask);
+        await Task.WhenAll(modelsTask, toolsTask, remoteTask, kbsTask);
 
         var (toolsConfigReachable1, models) = modelsTask.Result;
         var (toolsConfigReachable2, tools) = toolsTask.Result;
+        var (remoteReachable, remoteServers) = remoteTask.Result;
         var (ragConfigReachable, kbs) = kbsTask.Result;
 
+        var serverOptions = remoteServers
+            .Select(s => new RemoteMcpServerOptionDto(
+                s.Id,
+                s.Name,
+                s.RemoteMcpServerUrl,
+                s.TransportType,
+                s.AuthOption,
+                s.GroupIds,
+                s.Tools))
+            .ToList();
+
         return new AgentEditorOptionsDto(
-            models, kbs, tools,
-            new DownstreamAvailability(toolsConfigReachable1 && toolsConfigReachable2, ragConfigReachable));
+            models,
+            kbs,
+            tools.Where(t => !t.ToolType.Equals("Remote", StringComparison.OrdinalIgnoreCase)),
+            serverOptions,
+            new DownstreamAvailability(toolsConfigReachable1 && (toolsConfigReachable2 || remoteReachable), ragConfigReachable));
+    }
+
+    private async Task<IReadOnlyList<RuntimeRemoteMcpServerDto>> BuildRemoteMcpServersAsync(
+        AgentDefinition agent,
+        CancellationToken ct)
+    {
+        var selected = agent.AgentTools
+            .Where(t => t.ToolType == ToolType.Remote)
+            .ToList();
+        if (selected.Count == 0)
+            return Array.Empty<RuntimeRemoteMcpServerDto>();
+
+        var (reachable, servers) = await _toolsClient.GetActiveRemoteMcpServersAsync(ct);
+        if (!reachable)
+            throw new AppException("DOWNSTREAM_UNAVAILABLE",
+                "Tools service is unavailable. Cannot resolve remote MCP server details for the runtime manifest.", 503);
+
+        var selectedById = selected.ToDictionary(t => t.ToolId);
+        var matched = new HashSet<Guid>();
+        var result = new List<RuntimeRemoteMcpServerDto>();
+
+        foreach (var server in servers)
+        {
+            var tools = new List<RuntimeRemoteMcpToolDto>();
+            foreach (var tool in server.Tools)
+            {
+                if (!selectedById.TryGetValue(tool.Id, out var selectedTool))
+                    continue;
+                matched.Add(tool.Id);
+                var name = string.IsNullOrWhiteSpace(tool.Name) ? selectedTool.ToolNameCache : tool.Name;
+                tools.Add(new RuntimeRemoteMcpToolDto(tool.Id, name));
+            }
+
+            if (tools.Count == 0)
+                continue;
+
+            result.Add(new RuntimeRemoteMcpServerDto(
+                server.Id,
+                server.Name,
+                server.RemoteMcpServerUrl,
+                server.TransportType,
+                server.AuthOption,
+                server.ApiKey,
+                server.GroupIds.ToList(),
+                tools));
+        }
+
+        var missing = selectedById.Keys.Where(id => !matched.Contains(id)).ToList();
+        if (missing.Count > 0)
+            throw new AppException(ErrorCodes.ValidationFailed,
+                $"Remote tool {missing[0]} is not on an active MCP server visible to this agent.", 400);
+
+        return result;
     }
 
     public Task<IReadOnlyList<CallerGroupDto>> GetCallerGroupsAsync(CancellationToken ct = default)

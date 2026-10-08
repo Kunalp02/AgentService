@@ -30,6 +30,7 @@ public interface IToolsConfigClient
     Task<(bool Reachable, IReadOnlyList<ModelOptionDto> Models)> GetActiveModelsAsync(string? classification, CancellationToken ct = default);
     Task<(bool Reachable, ModelDetailDto? Detail)> GetModelAsync(Guid modelId, CancellationToken ct = default);
     Task<(bool Reachable, IReadOnlyList<ToolOptionDto> Tools)> GetAvailableToolsAsync(CancellationToken ct = default);
+    Task<(bool Reachable, IReadOnlyList<RemoteMcpServerDetailDto> Servers)> GetActiveRemoteMcpServersAsync(CancellationToken ct = default);
 
     // Task<ReferenceCheck> ValidateToolVisibleAsync(Guid toolId, string toolType, IReadOnlyCollection<Guid> agentGroupIds, CancellationToken ct = default);
 

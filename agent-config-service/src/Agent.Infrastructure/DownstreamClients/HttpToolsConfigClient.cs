@@ -235,13 +235,42 @@ public class HttpToolsConfigClient : IToolsConfigClient
         string Classification,
         HashSet<Guid> GroupIds);
 
-    private sealed record RemoteMcpToolSnapshot(Guid Id, string Name);
+    private sealed record RemoteMcpToolSnapshot(Guid Id, string Name, string? Description);
 
     private sealed record RemoteMcpServerSnapshot(
         Guid Id,
         string Name,
+        string? RemoteMcpServerUrl,
+        string? TransportType,
+        string? AuthOption,
+        string? ApiKey,
         HashSet<Guid> GroupIds,
         IReadOnlyList<RemoteMcpToolSnapshot> Tools);
+
+    private static RemoteMcpServerSnapshot EmptyServer(Guid id, string name, HashSet<Guid> groupIds) =>
+        new(id, name, null, null, null, null, groupIds, Array.Empty<RemoteMcpToolSnapshot>());
+
+    public async Task<(bool Reachable, IReadOnlyList<RemoteMcpServerDetailDto> Servers)> GetActiveRemoteMcpServersAsync(
+        CancellationToken ct = default)
+    {
+        var (reachable, servers) = await FetchActiveRemoteMcpServersAsync(ct);
+        if (!reachable)
+            return (false, Array.Empty<RemoteMcpServerDetailDto>());
+
+        var details = servers
+            .Where(s => s.Tools.Count > 0)
+            .Select(s => new RemoteMcpServerDetailDto(
+                s.Id,
+                s.Name,
+                s.RemoteMcpServerUrl,
+                s.TransportType,
+                s.AuthOption,
+                string.IsNullOrWhiteSpace(s.ApiKey) ? null : s.ApiKey,
+                s.GroupIds,
+                s.Tools.Select(t => new RemoteMcpToolOptionDto(t.Id, t.Name, t.Description)).ToList()))
+            .ToList();
+        return (true, details);
+    }
 
     public async Task<(bool Reachable, IReadOnlyList<ToolOptionDto> Tools)> GetAvailableToolsAsync(
         CancellationToken ct = default)
@@ -250,14 +279,6 @@ public class HttpToolsConfigClient : IToolsConfigClient
         {
             var results = new List<ToolOptionDto>();
             var anyOk = false;
-
-            var (remoteReachable, servers) = await FetchActiveRemoteMcpServersAsync(ct);
-            if (remoteReachable)
-            {
-                anyOk = true;
-                results.AddRange(FlattenRemoteTools(servers));
-                _logger.LogInformation("Remote MCP tools parsed: Count={Count}", results.Count);
-            }
 
             var localRequest = BuildRequest(HttpMethod.Get, "/api/v1/local-tools/approved");
             using var localResponse = await _http.SendAsync(localRequest, ct);
@@ -539,8 +560,13 @@ public class HttpToolsConfigClient : IToolsConfigClient
                 "Skipping remote MCP server {ServerName} with status {Status}",
                 serverName,
                 status);
-            return new RemoteMcpServerSnapshot(serverId, serverName, serverGroupIds, Array.Empty<RemoteMcpToolSnapshot>());
+            return EmptyServer(serverId, serverName, serverGroupIds);
         }
+
+        var serverUrl = NullIfBlank(server.ReadString("remoteMcpServerUrl"));
+        var transportType = NullIfBlank(server.ReadString("transportType"));
+        var authOption = NullIfBlank(server.ReadString("authOption"));
+        var apiKey = NullIfBlank(server.ReadString("apiKey"));
 
         if (!server.TryGetPropertyIgnoreCase("tools", out var tools) || tools.ValueKind != JsonValueKind.Array)
         {
@@ -548,8 +574,9 @@ public class HttpToolsConfigClient : IToolsConfigClient
                 "Remote MCP server {ServerName} ({ServerId}) has no tools array. Url={Url}",
                 serverName,
                 serverId,
-                server.ReadString("remoteMcpServerUrl"));
-            return new RemoteMcpServerSnapshot(serverId, serverName, serverGroupIds, Array.Empty<RemoteMcpToolSnapshot>());
+                serverUrl);
+            return new RemoteMcpServerSnapshot(
+                serverId, serverName, serverUrl, transportType, authOption, apiKey, serverGroupIds, Array.Empty<RemoteMcpToolSnapshot>());
         }
 
         var parsedTools = new List<RemoteMcpToolSnapshot>();
@@ -567,7 +594,8 @@ public class HttpToolsConfigClient : IToolsConfigClient
             if (string.IsNullOrWhiteSpace(toolName))
                 toolName = tool.ReadString("toolName");
 
-            parsedTools.Add(new RemoteMcpToolSnapshot(toolId, toolName));
+            var description = NullIfBlank(tool.ReadString("description"));
+            parsedTools.Add(new RemoteMcpToolSnapshot(toolId, toolName, description));
         }
 
         _logger.LogInformation(
@@ -576,25 +604,17 @@ public class HttpToolsConfigClient : IToolsConfigClient
             parsedTools.Count,
             string.Join(",", serverGroupIds));
 
-        return new RemoteMcpServerSnapshot(serverId, serverName, serverGroupIds, parsedTools);
+        return new RemoteMcpServerSnapshot(
+            serverId, serverName, serverUrl, transportType, authOption, apiKey, serverGroupIds, parsedTools);
     }
+
+    private static string? NullIfBlank(string value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
     private static int CountTools(IEnumerable<RemoteMcpServerSnapshot> servers)
         => servers.Sum(s => s.Tools.Count);
 
     private static string TrimForLog(string body)
         => body.Length <= 500 ? body : body[..500];
-
-    private static IEnumerable<ToolOptionDto> FlattenRemoteTools(IEnumerable<RemoteMcpServerSnapshot> servers)
-    {
-        foreach (var server in servers)
-        {
-            foreach (var tool in server.Tools)
-            {
-                yield return new ToolOptionDto(tool.Id, tool.Name, "Remote", server.GroupIds);
-            }
-        }
-    }
 
     private static bool GroupsAllowAssignment(HashSet<Guid> resourceGroupIds, IReadOnlyCollection<Guid> agentGroupIds)
     {
