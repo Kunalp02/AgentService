@@ -17,19 +17,25 @@ class ToolDefinitionService:
         tools: list[dict[str, Any]] = []
         for tool in ToolDefinitionService.iter_tools(manifest):
             name = ToolDefinitionService.sanitize_name(tool.tool_name or str(tool.tool_id))
+            schema = tool.resolved_input_schema()
+            parameters = schema or {
+                "type": "object",
+                "properties": {
+                    "input": {"type": "string", "description": "Primary input for the tool."}
+                },
+                "additionalProperties": True,
+            }
+            description = (
+                tool.description
+                or f"Invoke configured tool {tool.tool_name or tool.tool_id}."
+            )
             tools.append(
                 {
                     "type": "function",
                     "function": {
                         "name": name,
-                        "description": f"Invoke configured tool {tool.tool_name or tool.tool_id}.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "input": {"type": "string", "description": "Primary input for the tool."}
-                            },
-                            "additionalProperties": True,
-                        },
+                        "description": description,
+                        "parameters": parameters,
                     },
                 }
             )

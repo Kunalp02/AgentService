@@ -25,6 +25,10 @@ class AgentGraphState(TypedDict, total=False):
     history_total_turns: int
     history_turns_in_prompt: int
     history_truncated: bool
+    context_messages_trimmed: bool
+    context_input_tokens: int
+    context_input_budget: int
+    context_max_output_tokens: int
     memory_persisted: bool
     has_tools: bool
     tool_round: int

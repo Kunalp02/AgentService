@@ -78,6 +78,7 @@ def test_prompt_includes_files_and_knowledge():
     )
     prompt = PromptCompositionService.compose(
         manifest,
+        None,
         "Previous conversation",
         ["KB: Policies\n[1] claim"],
         "Attached files:\n\nFile notes.txt:\nhello",

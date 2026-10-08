@@ -8,13 +8,16 @@ class PromptCompositionService:
     @staticmethod
     def compose(
         manifest: RuntimeManifest,
-        memory_block: str | None,
+        memory_instructions: str | None,
+        history_block: str | None,
         kb_blocks: list[str],
         artifact_block: str | None = None,
     ) -> str:
         sections = [manifest.system_prompt.strip()]
-        if memory_block:
-            sections.append(memory_block)
+        if memory_instructions:
+            sections.append(memory_instructions)
+        if history_block:
+            sections.append(history_block)
         if kb_blocks:
             sections.append(
                 "Retrieved knowledge base context:\n" + "\n\n".join(kb_blocks)
@@ -27,7 +30,8 @@ class PromptCompositionService:
     @staticmethod
     def compose_within_budget(
         manifest: RuntimeManifest,
-        memory_block: str | None,
+        memory_instructions: str | None,
+        history_block: str | None,
         kb_blocks: list[str],
         artifact_block: str | None,
         user_input: str,
@@ -41,13 +45,16 @@ class PromptCompositionService:
                 "The system prompt and the new message are larger than the context budget.",
                 400,
             )
-        memory = memory_block
+        instructions = memory_instructions
+        history = history_block
         knowledge = list(kb_blocks)
         files = artifact_block
         traces: list[str] = []
 
         def composed() -> str:
-            return PromptCompositionService.compose(manifest, memory, knowledge, files)
+            return PromptCompositionService.compose(
+                manifest, instructions, history, knowledge, files
+            )
 
         while len(composed()) + len(user_input) > budget_chars:
             if files and len(files) > 200:
@@ -58,13 +65,17 @@ class PromptCompositionService:
                 knowledge.pop()
                 _add_trace(traces, "context.trimmed:knowledge")
                 continue
-            if memory and len(memory) > 200:
-                memory = memory[len(memory) // 2 :]
+            if history and len(history) > 200:
+                history = history[len(history) // 2 :]
                 _add_trace(traces, "context.trimmed:history")
+                continue
+            if instructions:
+                instructions = None
+                _add_trace(traces, "context.trimmed:memory_instructions")
                 continue
             files = None
             knowledge = []
-            memory = None
+            history = None
             break
         prompt = composed()
         if len(prompt) + len(user_input) > budget_chars:

@@ -421,7 +421,8 @@ class AgentExecutionService:
                 scope=state.get("memory_scope"),
                 total_turns=state.get("history_total_turns", 0),
                 turns_in_prompt=state.get("history_turns_in_prompt", 0),
-                truncated_for_context_window=bool(state.get("history_truncated")),
+                truncated_for_context_window=bool(state.get("history_truncated"))
+                or bool(state.get("context_messages_trimmed")),
                 persisted=bool(state.get("memory_persisted")),
             ),
             retrieved_context=state.get("retrieved_context") or [],
