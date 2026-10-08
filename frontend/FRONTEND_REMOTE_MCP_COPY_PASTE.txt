@@ -1,7 +1,7 @@
 FRONTEND REMOTE MCP EDITOR — COPY/PASTE
 ======================================
 
-Agent editor only. Remote tools are grouped under each MCP server name.
+Agent editor only. Each remote MCP server is a collapsible row: server name on top, tools underneath when opened.
 No model gateway / apiKey UI change. Save payload stays tools[{ toolId, toolType: "Remote" }].
 
 Apply the snippets in order. Paths are relative to the frontend folder (the one with package.json).
