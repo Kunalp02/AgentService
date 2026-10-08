@@ -28,6 +28,7 @@ public class AgentApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
                 ["Database:AutoMigrateAndSeed"] = "true",
                 ["AuthService:BaseUrl"] = "http://localhost:5001",
                 ["ToolsConfigService:BaseUrl"] = "http://localhost:5002",
+                ["ToolsConfigService:InternalServiceKey"] = "test-internal-key",
                 ["RagConfigService:BaseUrl"] = "http://localhost:5003"
             });
         });

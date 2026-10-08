@@ -4,6 +4,7 @@ ASP.NET Core agent definition and runtime-manifest API (`ccil.ai.platform.AgentC
 
 - **Solution:** [ccil.ai.platform.AgentConfigService.sln](./ccil.ai.platform.AgentConfigService.sln)
 - **Runtime config:** [Config_AIAgent.cnf](./Config_AIAgent.cnf) (Bifrost/JSON `ToolsConfigService` and `RagConfigService` base URLs)
+- **Remote tools:** set `ToolsConfigService:InternalServiceKey` (same value as tools service `LocalMcpRuntime:ApiKey`) so agent create/validate can call `GET /internal/v1/remote-mcp-servers/active`
 
 Build and run from this directory with the .NET 8 SDK:
 

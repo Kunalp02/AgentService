@@ -228,7 +228,6 @@ public class AgentService : IAgentService
             CancellationToken ct)
     {
         var groups = groupIds.ToList();
-        Console.WriteLine(groups);
 
         var modelCheck = await _toolsClient.ValidateModelVisibleAsync(modelId, groups, ct);
         EnsureReference(modelCheck,
