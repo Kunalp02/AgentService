@@ -25,11 +25,6 @@ _FINALIZE_PROMPT = (
 )
 
 
-def _join_blocks(*parts: str | None) -> str | None:
-    blocks = [part for part in parts if part]
-    return "\n\n".join(blocks) if blocks else None
-
-
 def _tool_calls_to_state(calls: list[LlmToolCall]) -> list[dict[str, Any]]:
     return [
         {"id": call.id, "name": call.name, "arguments": call.arguments}
