@@ -43,7 +43,8 @@
                 "GoogleAPIURL": "https://www.google.com/recaptcha/api/siteverify"
             },
             "ToolsConfigService":{
-                "BaseUrl": "http://172.19.204.37:8502"
+                "BaseUrl": "http://172.19.204.37:8502",
+                "InternalServiceKey": "REPLACE_WITH_TOOLS_LocalMcpRuntime_ApiKey"
             },
             "RagConfigService": {
                 "BaseUrl": "http://172.19.204.37:8503"
