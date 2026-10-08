@@ -7,7 +7,9 @@ public record RuntimeModelConfigDto(
         string ModelIdentifier,
         string Provider,
         string? BaseUrl,
-        IReadOnlyCollection<Guid> GroupIds
+        IReadOnlyCollection<Guid> GroupIds,
+        Guid? GatewayId = null,
+        string? ApiKey = null
 );
 
 

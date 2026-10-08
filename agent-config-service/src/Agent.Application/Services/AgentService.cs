@@ -163,9 +163,21 @@ public class AgentService : IAgentService
             throw new AppException("DOWNSTREAM_UNAVAILABLE",
                 "Tools/model service is unavailable. Cannot resolve gateway for model.", 503);
 
-        if (resolved is not null && !string.IsNullOrWhiteSpace(resolved.GatewayUrl))
+        if (resolved is not null)
         {
-            modelConfig = modelConfig with { BaseUrl = resolved.GatewayUrl };
+            var gatewayUrl = string.IsNullOrWhiteSpace(resolved.GatewayUrl)
+                ? modelConfig.BaseUrl
+                : resolved.GatewayUrl;
+            var modelIdentifier = string.IsNullOrWhiteSpace(resolved.ModelIdentifier)
+                ? modelConfig.ModelIdentifier
+                : resolved.ModelIdentifier;
+            modelConfig = modelConfig with
+            {
+                BaseUrl = gatewayUrl,
+                ModelIdentifier = modelIdentifier,
+                GatewayId = resolved.GatewayId == Guid.Empty ? null : resolved.GatewayId,
+                ApiKey = string.IsNullOrWhiteSpace(resolved.ApiKey) ? null : resolved.ApiKey,
+            };
         }
 
         var tools = agent.AgentTools

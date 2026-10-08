@@ -49,6 +49,8 @@ class ModelConfig(BaseModel):
     provider: str = "openai"
     base_url: str | None = None
     group_ids: list[UUID] = Field(default_factory=list)
+    gateway_id: UUID | None = None
+    api_key: str | None = None
 
 
 class RemoteMcpServerConfig(BaseModel):

@@ -143,6 +143,7 @@ class AgentExecutionService:
                         temperature=manifest.temperature,
                         bearer_token=bearer_token,
                         base_url=manifest.model.base_url,
+                        api_key=manifest.model.api_key,
                     ):
                         parts.append(token)
                         yield self._sse("token", {"text": token})

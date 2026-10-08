@@ -1,21 +1,29 @@
-NESTED REMOTE MCP SERVERS — .NET COPY/PASTE
-============================================
+NESTED REMOTE MCP SERVERS + MODEL GATEWAY — .NET COPY/PASTE
+===========================================================
 
 Replace each file below in the AgentConfigService solution.
 
-Editor options (no API key)
----------------------------
+Editor options (no API keys)
+----------------------------
 tools = local tools only
-remoteMcpServers[] = { id, name, remoteMcpServerUrl, transportType, authOption, groupIds, tools[{ id, name, description }] }
+remoteMcpServers[] = server + nested tools, no apiKey
 
-Runtime manifest
-----------------
-tools = local tools only
-remoteMcpServers[] = same server fields PLUS apiKey, and tools[] contains only the tools selected on that agent: { toolId, toolName }
+Runtime manifest model (from POST /api/v1/model-registry/resolve)
+-----------------------------------------------------------------
+model.baseUrl     = gatewayUrl
+model.gatewayId   = gatewayId
+model.apiKey      = apiKey
+model.modelIdentifier prefers the resolve response when it is present
+apiKey is not part of manifestHash
+
+Runtime manifest remote tools
+-----------------------------
+remoteMcpServers[] includes remoteMcpServerUrl, authOption, and apiKey
+tools[] under each server are only the tools selected on the agent
 
 Create/update body is unchanged: tools[{ toolId, toolType }].
-Set ToolsConfigService:InternalServiceKey so the manifest can read apiKey from GET /internal/v1/remote-mcp-servers/active.
-The API key is not included in manifestHash.
+Set ToolsConfigService:InternalServiceKey so remote server apiKey can be read
+from GET /internal/v1/remote-mcp-servers/active.
 
 ==============================================================================
 FILE PATH: src/Agent.Application/DTOs/PickerDtos.cs
@@ -96,7 +104,9 @@ public record RuntimeModelConfigDto(
         string ModelIdentifier,
         string Provider,
         string? BaseUrl,
-        IReadOnlyCollection<Guid> GroupIds
+        IReadOnlyCollection<Guid> GroupIds,
+        Guid? GatewayId = null,
+        string? ApiKey = null
 );
 
 
@@ -386,9 +396,21 @@ public class AgentService : IAgentService
             throw new AppException("DOWNSTREAM_UNAVAILABLE",
                 "Tools/model service is unavailable. Cannot resolve gateway for model.", 503);
 
-        if (resolved is not null && !string.IsNullOrWhiteSpace(resolved.GatewayUrl))
+        if (resolved is not null)
         {
-            modelConfig = modelConfig with { BaseUrl = resolved.GatewayUrl };
+            var gatewayUrl = string.IsNullOrWhiteSpace(resolved.GatewayUrl)
+                ? modelConfig.BaseUrl
+                : resolved.GatewayUrl;
+            var modelIdentifier = string.IsNullOrWhiteSpace(resolved.ModelIdentifier)
+                ? modelConfig.ModelIdentifier
+                : resolved.ModelIdentifier;
+            modelConfig = modelConfig with
+            {
+                BaseUrl = gatewayUrl,
+                ModelIdentifier = modelIdentifier,
+                GatewayId = resolved.GatewayId == Guid.Empty ? null : resolved.GatewayId,
+                ApiKey = string.IsNullOrWhiteSpace(resolved.ApiKey) ? null : resolved.ApiKey,
+            };
         }
 
         var tools = agent.AgentTools
@@ -1475,7 +1497,9 @@ public class HttpToolsConfigClient : IToolsConfigClient
                 return (false, null);
             }
 
-            var dto = await response.Content.ReadFromJsonAsync<ModelResolveDto>(cancellationToken: ct);
+            var dto = await response.Content.ReadFromJsonAsync<ModelResolveDto>(
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true },
+                ct);
             return (true, dto);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

@@ -134,8 +134,10 @@ class ManifestService:
                 or model.get("name")
                 or "gpt-4o-mini",
                 provider=(model.get("provider") or "openai").lower(),
-                base_url=model.get("baseUrl"),
+                base_url=model.get("baseUrl") or model.get("gatewayUrl"),
                 group_ids=[UUID(str(g)) for g in model.get("groupIds") or []],
+                gateway_id=UUID(str(model["gatewayId"])) if model.get("gatewayId") else None,
+                api_key=model.get("apiKey"),
             ),
             tools=[
                 AgentToolRef(

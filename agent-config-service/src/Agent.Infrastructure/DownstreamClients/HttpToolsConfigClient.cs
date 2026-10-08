@@ -168,7 +168,9 @@ public class HttpToolsConfigClient : IToolsConfigClient
                 return (false, null);
             }
 
-            var dto = await response.Content.ReadFromJsonAsync<ModelResolveDto>(cancellationToken: ct);
+            var dto = await response.Content.ReadFromJsonAsync<ModelResolveDto>(
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true },
+                ct);
             return (true, dto);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

@@ -183,6 +183,7 @@ class AgentGraphNodes:
             bearer_token=state.get("bearer_token"),
             tools=tools,
             base_url=manifest.model.base_url,
+            api_key=manifest.model.api_key,
         )
         updated = messages + [_assistant_message(result.content, result.tool_calls)]
         return {
@@ -242,6 +243,7 @@ class AgentGraphNodes:
             bearer_token=state.get("bearer_token"),
             tools=None,
             base_url=manifest.model.base_url,
+            api_key=manifest.model.api_key,
         )
         return {
             "output": result.content,
