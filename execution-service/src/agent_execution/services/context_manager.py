@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent_execution.core.exceptions import ServiceError
-from agent_execution.schemas.runtime import MemoryConfig, RuntimeManifest
+from agent_execution.schemas.runtime import AgentMemoryScope, MemoryConfig, RuntimeManifest
 from agent_execution.services.context_budget import ContextBudget
 from agent_execution.services.memory_prompt_policy import MemoryPromptPolicy
 from agent_execution.services.prompt_composition_service import PromptCompositionService
@@ -32,16 +32,24 @@ class ContextManager:
     """
     Thread-scoped context packing (no cross-thread sharing).
 
-    Strategy (similar to common host practice: protect instructions + latest turn,
-    trim retrieved context and older tool results first):
-      1. Pin agent system prompt and the current user message.
-      2. Apply runtime manifest memory policy (enabled, instructions, retention/limits) before packing.
-      3. Trim, in order: file attachments → KB blocks → conversation history → memory instructions.
-      4. On multi-step tool loops, cap tool message size then drop oldest assistant/tool groups.
+    Strategy (see execution-service/CONTEXT_MANAGEMENT.md):
+      1. Pin the agent system prompt and the current user message.
+      2. Apply the runtime manifest memory policy before packing.
+      3. With thread isolation on, memory is stored and read only for this thread.
+      4. Shorten files, then knowledge, then compact older history, then memory notes.
+      5. On tool loops, cap tool results and drop the oldest completed tool round.
     """
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+
+    def isolate_memory(self, memory: MemoryConfig) -> MemoryConfig:
+        """Force Session scope so User, Agent, and Organization memory cannot cross threads."""
+        if not self._settings.context_isolate_threads:
+            return memory
+        if memory.scope == AgentMemoryScope.SESSION:
+            return memory
+        return memory.model_copy(update={"scope": AgentMemoryScope.SESSION})
 
     def budget_for_thread(
         self,
@@ -103,7 +111,10 @@ class ContextManager:
             user_input,
             char_budget,
         )
-        history_truncated = "context.trimmed:history" in trim_traces
+        history_truncated = (
+            "context.trimmed:history" in trim_traces
+            or "context.compacted:history" in trim_traces
+        )
         estimated = self.estimate_tokens(system_prompt + user_input, budget.chars_per_token)
         return SystemContextPack(
             system_prompt=system_prompt,

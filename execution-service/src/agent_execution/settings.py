@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     context_chars_per_token: float = 4.0
     context_tool_round_reserve_tokens: int = 1024
     context_tool_message_max_chars: int = 4000
+    context_isolate_threads: bool = True
     public_base_url: str = "http://172.19.204.37"
     api_key_encryption_secret: str = "keepitstable"
 

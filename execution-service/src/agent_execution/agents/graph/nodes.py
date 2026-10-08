@@ -66,9 +66,10 @@ class AgentGraphNodes:
     async def prepare_context(self, state: AgentGraphState) -> AgentGraphState:
         agent_id = uuid.UUID(state["agent_id"])
         bearer_token = state.get("bearer_token")
-        session_id = (
-            state.get("session_id") or state.get("thread_id") or str(uuid.uuid4())
-        )
+        thread_id = state.get("thread_id")
+        session_id = state.get("session_id") or thread_id or str(uuid.uuid4())
+        if self._ctx.settings.context_isolate_threads and thread_id:
+            session_id = str(thread_id)
         mem_context = MemoryContext(session_id=session_id, org_id=state.get("org_id"))
         user_input = state["user_input"]
 
@@ -77,7 +78,8 @@ class AgentGraphNodes:
         else:
             manifest = await self._ctx.manifest_service.resolve(agent_id, bearer_token)
 
-        memory_cfg = manifest.memory
+        memory_cfg = self._ctx.context_manager.isolate_memory(manifest.memory)
+        manifest = manifest.model_copy(update={"memory": memory_cfg})
         self._ctx.memory_service.validate_context(memory_cfg, mem_context)
         history = (
             await self._ctx.memory_service.load_history(

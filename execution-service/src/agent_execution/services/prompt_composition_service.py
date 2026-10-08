@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from agent_execution.core.exceptions import ServiceError
 from agent_execution.schemas.runtime import RuntimeManifest
+from agent_execution.services.context_strategy import compact_history_block
 
 
 class PromptCompositionService:
@@ -66,8 +67,14 @@ class PromptCompositionService:
                 _add_trace(traces, "context.trimmed:knowledge")
                 continue
             if history and len(history) > 200:
-                history = history[len(history) // 2 :]
-                _add_trace(traces, "context.trimmed:history")
+                previous = history
+                history, compacted = compact_history_block(history, max(200, len(history) // 2))
+                if compacted:
+                    _add_trace(traces, "context.compacted:history")
+                    _add_trace(traces, "context.trimmed:history")
+                if history is None or history == previous:
+                    history = None
+                    _add_trace(traces, "context.trimmed:history")
                 continue
             if instructions:
                 instructions = None

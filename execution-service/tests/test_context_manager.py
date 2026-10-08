@@ -6,7 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from agent_execution.core.exceptions import ServiceError
-from agent_execution.schemas.runtime import MemoryConfig, ModelConfig, RuntimeManifest
+from agent_execution.schemas.runtime import AgentMemoryScope, MemoryConfig, ModelConfig, RuntimeManifest
+from agent_execution.services.context_strategy import compact_history_block
 from agent_execution.services.context_budget import ContextBudget
 from agent_execution.services.context_manager import ContextManager
 
@@ -109,6 +110,26 @@ def test_fit_messages_truncates_tool_content_and_drops_old_rounds():
     fitted = manager.fit_messages(messages, budget=budget)
     assert any("truncated" in str(m.get("content", "")) for m in fitted.messages if m.get("role") == "tool")
     assert fitted.trimmed
+
+
+def test_compact_history_keeps_the_newest_lines():
+    lines = [f"User: turn {index} " + ("word " * 30) for index in range(12)]
+    block = "Previous conversation (most recent last):\n" + "\n".join(lines)
+    compacted, changed = compact_history_block(block, 500)
+    assert changed
+    assert compacted is not None
+    assert "turn 11" in compacted
+    assert "compacted" in compacted
+    assert "turn 0" not in compacted
+
+
+def test_isolate_memory_forces_session_scope():
+    manager = ContextManager(_settings())
+    manager._settings.context_isolate_threads = True
+    isolated = manager.isolate_memory(
+        MemoryConfig(enabled=True, scope=AgentMemoryScope.ORGANIZATION)
+    )
+    assert isolated.scope == AgentMemoryScope.SESSION
 
 
 def test_fit_messages_raises_when_unrecoverable():
