@@ -2,6 +2,8 @@
 import React, { useState } from 'react';
 import { Shield, Key, User, Lock, Cpu, ArrowRight, Clock, AlertCircle, BrainCircuit, Sparkle, Astroid } from 'lucide-react';
 import { usePlatform } from '../../context/PlatformContext';
+import Logo from "../../assets/images/logo_light.svg";
+import DarkLogo from "../../assets/images/logo_dark.svg";
 
 export const LoginPage: React.FC = () => {
   const { login, authLoading, authError, currentUser, theme } = usePlatform();

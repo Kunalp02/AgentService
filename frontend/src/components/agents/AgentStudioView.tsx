@@ -1,9 +1,11 @@
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   Bot,
   Check,
+  ChevronDown,
+  ChevronRight,
   Lock,
   Plus,
   RefreshCw,
@@ -14,28 +16,19 @@ import {
 } from "lucide-react";
 import { usePlatform } from "../../context/PlatformContext";
 import { PERMISSIONS } from "../../config/permissions";
+import { agentsApi } from "../../api/agents";
 import { groupName, userGroupEntries } from "../../api/groupDirectory";
 import {
-  agentErrorMessage,
-  useCreateAgentMutation,
-  useDeleteAgentMutation,
-  useGetAgentsQuery,
-  useGetEditorOptionsQuery,
-  useLazyGetAgentQuery,
-  usePatchAgentMutation,
-  usePublishAgentMutation,
-  useUnpublishAgentMutation,
-} from "../../store/agentApi";
-import {
+  normalizeAgent,
+  normalizeEditorOptions,
   toCreatePayload,
+  type AgentEditorOptionsDto,
   type AgentKnowledgeBaseRef,
   type AgentToolRef,
   type AgentUi,
   type KnowledgeBaseMode,
 } from "../../types/agent";
 import { Modal } from "../../rag/Overlays";
-
-const AGENT_PAGE_SIZE = 25;
 
 const emptyForm = {
   name: "",
@@ -64,25 +57,12 @@ const labelClass = "block text-[11px] font-semibold text-slate-400 mb-1.5";
 
 export const AgentStudioView: React.FC = () => {
   const {
+    agents,
     currentUser,
     hasPermission,
+    reloadPlatformData,
     showNotification,
   } = usePlatform();
-  const [agentPage, setAgentPage] = useState(1);
-  const agentListQuery = useGetAgentsQuery({
-    page: agentPage,
-    pageSize: AGENT_PAGE_SIZE,
-  });
-  const agents = agentListQuery.currentData?.items ?? [];
-  const totalAgents = agentListQuery.data?.totalCount ?? 0;
-  const totalPages = Math.max(1, Math.ceil(totalAgents / AGENT_PAGE_SIZE));
-  const [loadAgent, { isFetching: agentDetailLoading }] =
-    useLazyGetAgentQuery();
-  const [createAgentMutation] = useCreateAgentMutation();
-  const [patchAgentMutation] = usePatchAgentMutation();
-  const [deleteAgentMutation] = useDeleteAgentMutation();
-  const [publishAgentMutation] = usePublishAgentMutation();
-  const [unpublishAgentMutation] = useUnpublishAgentMutation();
 
   const canCreate = hasPermission(PERMISSIONS.Agent.Create);
   const canEdit = hasPermission(PERMISSIONS.Agent.Edit);
@@ -105,24 +85,16 @@ export const AgentStudioView: React.FC = () => {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [options, setOptions] = useState<AgentEditorOptionsDto | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<AgentUi | null>(null);
   const [mode, setMode] = useState<"create" | "edit">("create");
   const [form, setForm] = useState<FormState>(emptyForm);
   const [formTab, setFormTab] = useState<FormTabKey>("access");
   const [modalOpen, setModalOpen] = useState(false);
-  const selectedRequestId = useRef<string | null>(null);
-  const shouldFetchEditorOptions =
-    modalOpen && (mode === "create" || detail !== null);
-  const editorOptionsQuery = useGetEditorOptionsQuery(
-    { groupIds: form.groupIds },
-    { skip: !shouldFetchEditorOptions },
-  );
-  const options = editorOptionsQuery.currentData ?? null;
+  const [openRemoteServerIds, setOpenRemoteServerIds] = useState<string[]>([]);
 
   const readOnly = mode === "edit" && !canEdit;
-  const actionLoading =
-    loading || agentDetailLoading || editorOptionsQuery.isFetching;
 
   /* Groups offered on the Access tab: mine, plus any group already on the
      agent being edited (so an existing grant is shown, never silently
@@ -154,9 +126,24 @@ export const AgentStudioView: React.FC = () => {
     [options],
   );
 
-  const remoteTools = useMemo(
-    () => (options?.tools ?? []).filter((t) => t.toolType === "Remote"),
+  const remoteServers = useMemo(
+    () => options?.remoteMcpServers ?? [],
     [options],
+  );
+
+  const remoteTools = useMemo(
+    () =>
+      remoteServers.length > 0
+        ? remoteServers.flatMap((server) =>
+            server.tools.map((tool) => ({
+              id: tool.id,
+              name: tool.name,
+              toolType: "Remote",
+              groupIds: server.groupIds,
+            })),
+          )
+        : (options?.tools ?? []).filter((t) => t.toolType === "Remote"),
+    [options, remoteServers],
   );
 
   const localTools = useMemo(
@@ -164,30 +151,63 @@ export const AgentStudioView: React.FC = () => {
     [options],
   );
 
-  useEffect(() => {
-    if (!options) return;
-
-    setForm((current) => {
-      const modelIds = new Set(options.models.map((model) => model.id));
-      const knowledgeBaseIds = new Set(
-        options.knowledgeBases.map((knowledgeBase) => knowledgeBase.id),
+  const loadOptions = async (groupIds: string[]) => {
+    try {
+      const next = normalizeEditorOptions(
+        await agentsApi.getEditorOptions(groupIds),
       );
-      const toolIds = new Set(options.tools.map((tool) => tool.id));
 
-      return {
-        ...current,
-        modelId: modelIds.has(current.modelId) ? current.modelId : "",
-        knowledgeBases: current.knowledgeBases.filter((knowledgeBase) =>
-          knowledgeBaseIds.has(knowledgeBase.knowledgeBaseId),
-        ),
-        tools: current.tools.filter((tool) => toolIds.has(tool.toolId)),
-      };
-    });
-  }, [options]);
+      setOptions(next);
+
+      setForm((current) => {
+        const modelIds = new Set((next.models ?? []).map((m) => m.id));
+
+        const kbIds = new Set((next.knowledgeBases ?? []).map((k) => k.id));
+
+        const toolIds = new Set([
+          ...(next.tools ?? []).map((t) => t.id),
+          ...(next.remoteMcpServers ?? []).flatMap((server) =>
+            server.tools.map((tool) => tool.id),
+          ),
+        ]);
+
+        return {
+          ...current,
+          modelId: modelIds.has(current.modelId) ? current.modelId : "",
+          knowledgeBases: current.knowledgeBases.filter((k) =>
+            kbIds.has(k.knowledgeBaseId),
+          ),
+          tools: current.tools.filter((t) => toolIds.has(t.toolId)),
+        };
+      });
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Failed to load editor options (models / KBs / tools).",
+      );
+    }
+  };
+
+  /*
+   * The sorted group selection is used as the dependency key.
+   * This means:
+   *
+   * [A, B] === [B, A]
+   *
+   * from the API-fetch perspective, so changing checkbox order does not
+   * trigger an unnecessary reload.
+   */
+  const groupKey = form.groupIds.slice().sort().join(",");
 
   useEffect(() => {
-    if (agentPage > totalPages) setAgentPage(totalPages);
-  }, [agentPage, totalPages]);
+    if (!modalOpen) return;
+
+    void loadOptions(form.groupIds);
+
+    // groupKey is the sorted selection, so order of clicks does not refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupKey]);
 
   /*
    * One group available: pre-select it when creating.
@@ -206,11 +226,9 @@ export const AgentStudioView: React.FC = () => {
     setError("");
 
     try {
-      await agentListQuery.refetch().unwrap();
-      if (shouldFetchEditorOptions)
-        await editorOptionsQuery.refetch().unwrap();
+      await Promise.all([reloadPlatformData(), loadOptions(form.groupIds)]);
     } catch (e) {
-      setError(agentErrorMessage(e, "Failed to refresh agent data."));
+      setError(e instanceof Error ? e.message : "Failed to load agents.");
     } finally {
       setLoading(false);
     }
@@ -219,7 +237,6 @@ export const AgentStudioView: React.FC = () => {
   const openCreate = () => {
     const initialGroups = myGroups[0]?.id ? [myGroups[0].id] : [];
 
-    selectedRequestId.current = null;
     setMode("create");
     setSelectedId(null);
     setDetail(null);
@@ -235,18 +252,16 @@ export const AgentStudioView: React.FC = () => {
   };
 
   const openEdit = async (id: string) => {
-    selectedRequestId.current = id;
     setError("");
     setFormTab("basics");
     setModalOpen(true);
     setMode("edit");
     setSelectedId(id);
-    setDetail(null);
-    setForm(emptyForm);
+    setLoading(true);
 
     try {
-      const agent = await loadAgent(id, true).unwrap();
-      if (selectedRequestId.current !== id) return;
+      const dto = await agentsApi.getAgent(id);
+      const agent = normalizeAgent(dto);
 
       setDetail(agent);
 
@@ -265,13 +280,13 @@ export const AgentStudioView: React.FC = () => {
         memoryInstructions: agent.memoryInstructions,
       });
     } catch (e) {
-      if (selectedRequestId.current === id)
-        setError(agentErrorMessage(e, "Failed to load agent."));
+      setError(e instanceof Error ? e.message : "Failed to load agent.");
+    } finally {
+      setLoading(false);
     }
   };
 
   const closeModal = () => {
-    selectedRequestId.current = null;
     setModalOpen(false);
     setError("");
   };
@@ -417,23 +432,22 @@ export const AgentStudioView: React.FC = () => {
 
     try {
       if (mode === "create") {
-        const created = await createAgentMutation(payload()).unwrap();
+        const created = await agentsApi.createAgent(payload());
 
         showNotification?.(`Created ${created.name}`);
 
+        await reloadPlatformData();
         await openEdit(created.id);
       } else if (selectedId) {
-        const updated = await patchAgentMutation({
-          id: selectedId,
-          data: payload(),
-        }).unwrap();
+        const updated = await agentsApi.patchAgent(selectedId, payload());
 
         showNotification?.(`Saved ${updated.name}`);
 
-        setDetail(updated);
+        setDetail(normalizeAgent(updated));
+        await reloadPlatformData();
       }
     } catch (err) {
-      setError(agentErrorMessage(err, "Save failed."));
+      setError(err instanceof Error ? err.message : "Save failed.");
     } finally {
       setLoading(false);
     }
@@ -448,14 +462,15 @@ export const AgentStudioView: React.FC = () => {
     setError("");
 
     try {
-      await deleteAgentMutation(selectedId).unwrap();
+      await agentsApi.deleteAgent(selectedId);
 
       showNotification?.("Agent deleted.");
 
       closeModal();
 
+      await reloadPlatformData();
     } catch (err) {
-      setError(agentErrorMessage(err, "Delete failed."));
+      setError(err instanceof Error ? err.message : "Delete failed.");
     } finally {
       setLoading(false);
     }
@@ -468,12 +483,15 @@ export const AgentStudioView: React.FC = () => {
     setError("");
 
     try {
-      const updated = publish
-        ? await publishAgentMutation(selectedId).unwrap()
-        : await unpublishAgentMutation(selectedId).unwrap();
-      setDetail(updated);
+      const dto = publish
+        ? await agentsApi.publishAgent(selectedId)
+        : await agentsApi.unpublishAgent(selectedId);
+
+      setDetail(normalizeAgent(dto));
+
+      await reloadPlatformData();
     } catch (err) {
-      setError(agentErrorMessage(err, "Publish failed."));
+      setError(err instanceof Error ? err.message : "Publish failed.");
     } finally {
       setLoading(false);
     }
@@ -535,11 +553,11 @@ export const AgentStudioView: React.FC = () => {
           <button
             type="button"
             onClick={refresh}
-            disabled={loading || agentListQuery.isFetching}
+            disabled={loading}
             className="px-3 py-2 rounded bg-slate-800 text-slate-200 text-xs"
           >
             <RefreshCw
-              className={`w-4 h-4 inline mr-1 ${loading || agentListQuery.isFetching ? "animate-spin" : ""}`}
+              className={`w-4 h-4 inline mr-1 ${loading ? "animate-spin" : ""}`}
             />
             Refresh
           </button>
@@ -558,23 +576,11 @@ export const AgentStudioView: React.FC = () => {
         )}
 
       <div className="space-y-3">
-        {agentListQuery.isError && (
-          <div className="p-3 rounded-lg border border-rose-500/40 bg-rose-500/10 text-xs text-rose-200">
-            {agentErrorMessage(agentListQuery.error, "Failed to load agents.")}
-          </div>
-        )}
-        {agentListQuery.isFetching && agents.length === 0 && (
-          <div className="p-8 rounded-xl border border-dashed border-slate-800 text-center text-xs text-slate-500">
-            Loading agents…
-          </div>
-        )}
-        {!agentListQuery.isFetching &&
-          !agentListQuery.isError &&
-          agents.length === 0 && (
+        {agents.length === 0 && (
           <div className="p-8 rounded-xl border border-dashed border-slate-800 text-center text-xs text-slate-500">
             No agents visible to your groups.
           </div>
-          )}
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {agents.map((agent) => (
@@ -604,38 +610,6 @@ export const AgentStudioView: React.FC = () => {
             </button>
           ))}
         </div>
-        {totalAgents > 0 && (
-          <div className="flex items-center justify-between gap-3 text-xs text-slate-400">
-            <span>
-              Showing {(agentPage - 1) * AGENT_PAGE_SIZE + 1}–
-              {Math.min(agentPage * AGENT_PAGE_SIZE, totalAgents)} of{" "}
-              {totalAgents}
-            </span>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                disabled={agentPage <= 1 || agentListQuery.isFetching}
-                onClick={() => setAgentPage((page) => Math.max(1, page - 1))}
-                className="px-3 py-1.5 rounded bg-slate-800 text-slate-200 disabled:opacity-40"
-              >
-                Previous
-              </button>
-              <span className="py-1.5">
-                Page {agentPage} of {totalPages}
-              </span>
-              <button
-                type="button"
-                disabled={agentPage >= totalPages || agentListQuery.isFetching}
-                onClick={() =>
-                  setAgentPage((page) => Math.min(totalPages, page + 1))
-                }
-                className="px-3 py-1.5 rounded bg-slate-800 text-slate-200 disabled:opacity-40"
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        )}
       </div>
 
       <Modal
@@ -669,7 +643,7 @@ export const AgentStudioView: React.FC = () => {
               {mode === "edit" && canDelete && (
                 <button
                   type="button"
-                  disabled={actionLoading}
+                  disabled={loading}
                   onClick={() => void remove()}
                   className="px-3.5 py-2 rounded-lg bg-rose-800 hover:bg-rose-700 text-white text-xs transition-colors"
                 >
@@ -683,7 +657,7 @@ export const AgentStudioView: React.FC = () => {
                 detail?.status === "Published" && (
                   <button
                     type="button"
-                    disabled={actionLoading}
+                    disabled={loading}
                     onClick={() => void publish(false)}
                     className="px-3.5 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs transition-colors"
                   >
@@ -697,7 +671,7 @@ export const AgentStudioView: React.FC = () => {
                 detail?.status !== "Published" && (
                   <button
                     type="button"
-                    disabled={actionLoading}
+                    disabled={loading}
                     onClick={() => void publish(true)}
                     className="px-3.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs transition-colors"
                   >
@@ -710,7 +684,7 @@ export const AgentStudioView: React.FC = () => {
                 <button
                   type="submit"
                   form="agent-studio-form"
-                  disabled={actionLoading}
+                  disabled={loading}
                   className="px-3.5 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold transition-colors"
                 >
                   <Save className="w-3.5 h-3.5 inline mr-1" />
@@ -722,11 +696,7 @@ export const AgentStudioView: React.FC = () => {
           )
         }
       >
-        {mode === "edit" && agentDetailLoading ? (
-          <div className="py-8 text-center text-xs text-slate-400">
-            Loading agent configuration…
-          </div>
-        ) : !canCreate && mode === "create" ? (
+        {!canCreate && mode === "create" ? (
           <div className="text-xs text-slate-500">
             <Lock className="w-4 h-4 inline mr-1" />
             You have view access only. Open an existing agent to inspect it.
@@ -751,14 +721,10 @@ export const AgentStudioView: React.FC = () => {
               ))}
             </div>
 
-            {(error || editorOptionsQuery.error) && (
+            {error && (
               <div className="p-3 rounded-lg border border-rose-500/40 bg-rose-500/10 text-xs text-rose-200">
                 <AlertCircle className="w-4 h-4 inline mr-1" />
-                {error ||
-                  agentErrorMessage(
-                    editorOptionsQuery.error,
-                    "Failed to load editor options.",
-                  )}
+                {error}
               </div>
             )}
 
@@ -1047,22 +1013,72 @@ export const AgentStudioView: React.FC = () => {
                       Remote tools
                     </div>
 
-                    <div className="space-y-1 max-h-40 overflow-auto rounded-lg border border-slate-800 p-2">
-                      {remoteTools.map((t) => (
-                        <label
-                          key={t.id}
-                          className="flex items-center gap-2 text-[11px] text-slate-300 py-1"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={form.tools.some((x) => x.toolId === t.id)}
-                            onChange={() => toggleTool(t.id, "Remote")}
-                            disabled={readOnly}
-                          />
+                    <div className="space-y-2 max-h-64 overflow-auto rounded-lg border border-slate-800 p-2">
+                      {remoteServers.map((server) => {
+                        const open = openRemoteServerIds.includes(server.id);
+                        const selectedCount = server.tools.filter((t) =>
+                          form.tools.some((x) => x.toolId === t.id),
+                        ).length;
+                        return (
+                          <div key={server.id} className="rounded-md border border-slate-800">
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[11px] font-semibold text-slate-200 bg-slate-900/60"
+                              onClick={() =>
+                                setOpenRemoteServerIds((current) =>
+                                  current.includes(server.id)
+                                    ? current.filter((id) => id !== server.id)
+                                    : [...current, server.id],
+                                )
+                              }
+                            >
+                              {open ? (
+                                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                              ) : (
+                                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                              )}
+                              <span className="min-w-0 flex-1 truncate">{server.name}</span>
+                              <span className="text-[10px] font-medium text-slate-500">
+                                {selectedCount}/{server.tools.length}
+                              </span>
+                            </button>
+                            {open && (
+                              <div className="space-y-1 border-t border-slate-800 p-2">
+                                {server.tools.map((t) => (
+                                  <label
+                                    key={t.id}
+                                    className="flex items-center gap-2 text-[11px] text-slate-300 py-1"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={form.tools.some((x) => x.toolId === t.id)}
+                                      onChange={() => toggleTool(t.id, "Remote")}
+                                      disabled={readOnly}
+                                    />
+                                    {t.name}
+                                  </label>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
 
-                          {t.name}
-                        </label>
-                      ))}
+                      {remoteServers.length === 0 &&
+                        remoteTools.map((t) => (
+                          <label
+                            key={t.id}
+                            className="flex items-center gap-2 text-[11px] text-slate-300 py-1"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={form.tools.some((x) => x.toolId === t.id)}
+                              onChange={() => toggleTool(t.id, "Remote")}
+                              disabled={readOnly}
+                            />
+                            {t.name}
+                          </label>
+                        ))}
 
                       {remoteTools.length === 0 && (
                         <div className="text-[11px] text-slate-500 py-2">

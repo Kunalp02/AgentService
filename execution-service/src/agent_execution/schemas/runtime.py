@@ -49,6 +49,19 @@ class ModelConfig(BaseModel):
     provider: str = "openai"
     base_url: str | None = None
     group_ids: list[UUID] = Field(default_factory=list)
+    gateway_id: UUID | None = None
+    api_key: str | None = None
+
+
+class RemoteMcpServerConfig(BaseModel):
+    id: UUID
+    name: str | None = None
+    remote_mcp_server_url: str | None = None
+    transport_type: str | None = None
+    auth_option: str | None = None
+    api_key: str | None = None
+    group_ids: list[UUID] = Field(default_factory=list)
+    tools: list[AgentToolRef] = Field(default_factory=list)
 
 
 class RuntimeManifest(BaseModel):
@@ -60,6 +73,7 @@ class RuntimeManifest(BaseModel):
     temperature: float = 0.7
     model: ModelConfig
     tools: list[AgentToolRef] = Field(default_factory=list)
+    remote_mcp_servers: list[RemoteMcpServerConfig] = Field(default_factory=list)
     knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     manifest_hash: str = ""
@@ -72,4 +86,5 @@ class RuntimeManifest(BaseModel):
     @property
     def has_tools(self) -> bool:
         tool_mode_kbs = any(kb.mode == KnowledgeBaseMode.TOOL for kb in self.knowledge_bases)
-        return bool(self.tools) or tool_mode_kbs
+        remote_tools = any(server.tools for server in self.remote_mcp_servers)
+        return bool(self.tools) or remote_tools or tool_mode_kbs

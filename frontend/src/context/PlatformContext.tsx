@@ -18,6 +18,7 @@ import { roleProfilesApi, roleAttributesApi } from "../api/roleApi";
 import { usersApi } from "../api/usersApi";
 import { localToolsApi } from "../api/localToolsApi";
 import { remoteToolsApi } from "../api/remoteToolsApi";
+import { agentsApi } from "../api/agents";
 import { decodeJwtPayload, isJwtExpired } from "../api/jwt";
 import {
   forget as forgetGroupNames,
@@ -51,6 +52,12 @@ import type {
   LocalToolListItemDto,
   RemoteToolListItemDto,
 } from "../types/tools";
+import {
+  normalizeAgent,
+  type AgentUi,
+  type CreateAgentRequest,
+  type PatchAgentRequest,
+} from "../types/agent";
 import { useSessionRefresh } from "../hooks/useSessionRefresh";
 
 export interface PlatformContextType {
@@ -110,11 +117,19 @@ export interface PlatformContextType {
   gateways: AiGatewayDto[];
   models: ModelRegistryDto[];
   knowledgeBases: any[];
+  agents: AgentUi[];
   strategies: any[];
   ingestedDocs: any[];
   auditLogs: any[];
 
   reloadPlatformData: (view?: string) => Promise<void>;
+  addAgent: (data: CreateAgentRequest) => Promise<void>;
+  updateAgent: (id: string, data: PatchAgentRequest) => Promise<void>;
+  deleteAgent: (agentId: string) => Promise<void>;
+  publishAgent: (agentId: string) => Promise<void>;
+  unpublishAgent: (agentId: string) => Promise<void>;
+  selectedPlaygroundAgentId: string | null;
+  setSelectedPlaygroundAgentId: (id: string | null) => void;
 
   activeView: string;
   setActiveView: (view: string) => void;
@@ -246,8 +261,12 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
   const [knowledgeBases, setKnowledgeBases] = useState<any[]>([]);
   const [strategies, setStrategies] = useState<any[]>([]);
   const [ingestedDocs, setIngestedDocs] = useState<any[]>([]);
+  const [agents, setAgents] = useState<AgentUi[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
 
+  const [selectedPlaygroundAgentId, setSelectedPlaygroundAgentId] = useState<
+    string | null
+  >(null);
   const [activeViewState, setActiveViewState] = useState("tools");
   const [notification, setNotification] = useState<string | null>(null);
   const [theme, setThemeState] = useState<"light" | "dark" | "enterprise">(
@@ -442,6 +461,21 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
             })(),
           );
         }
+      } else if (
+        view === "agents" ||
+        view === "playground" ||
+        view === "audit"
+      ) {
+        if (hasPermission(PERMISSIONS.Agent.View)) {
+          tasks.push(
+            (async () => {
+              const result = await agentsApi.getAgents(1, 200);
+              setAgents(
+                (result?.items ?? []).map(normalizeAgent).filter((a) => a.id),
+              );
+            })(),
+          );
+        }
       }
 
       await Promise.allSettled(tasks);
@@ -485,6 +519,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
       setModels([]);
       setKnowledgeBases([]);
       setStrategies([]);
+      setAgents([]);
       setActiveViewState("tools");
       try {
         const response: LoginResponse = await authApi.login(username, password);
@@ -564,7 +599,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
         setAuthLoading(false);
       }
     },
-    [dispatch, showNotification],
+    [showNotification],
   );
 
   const logout = useCallback(() => {
@@ -581,6 +616,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
     setModels([]);
     setKnowledgeBases([]);
     setStrategies([]);
+    setAgents([]);
     void authApi.logout(token);
     showNotification("Logged out.");
   }, [accessToken, dispatch, showNotification]);
@@ -641,6 +677,34 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
     await refetchUsers();
   };
 
+  const addAgent = async (data: CreateAgentRequest) => {
+    await agentsApi.createAgent(data);
+    showNotification("Agent created.");
+    const result = await agentsApi.getAgents(1, 200);
+    setAgents((result?.items ?? []).map(normalizeAgent).filter((a) => a.id));
+  };
+  const updateAgent = async (id: string, data: PatchAgentRequest) => {
+    await agentsApi.patchAgent(id, data);
+    showNotification("Agent saved.");
+    const result = await agentsApi.getAgents(1, 200);
+    setAgents((result?.items ?? []).map(normalizeAgent).filter((a) => a.id));
+  };
+  const deleteAgent = async (agentId: string) => {
+    await agentsApi.deleteAgent(agentId);
+    showNotification("Agent deleted.");
+    setAgents((prev) => prev.filter((a) => a.id !== agentId));
+  };
+
+  const publishAgent = async (agentId: string) => {
+    await agentsApi.publishAgent(agentId);
+    const result = await agentsApi.getAgents(1, 200);
+    setAgents((result?.items ?? []).map(normalizeAgent).filter((a) => a.id));
+  };
+  const unpublishAgent = async (agentId: string) => {
+    await agentsApi.unpublishAgent(agentId);
+    const result = await agentsApi.getAgents(1, 200);
+    setAgents((result?.items ?? []).map(normalizeAgent).filter((a) => a.id));
+  };
   const setTheme = (theme: "light" | "dark" | "enterprise") => {
     setThemeState(theme);
     localStorage.setItem("ai_platform_theme", theme);
@@ -687,10 +751,18 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
     gateways,
     models,
     knowledgeBases,
+    agents,
     strategies,
     ingestedDocs,
     auditLogs,
     reloadPlatformData,
+    addAgent,
+    updateAgent,
+    deleteAgent,
+    publishAgent,
+    unpublishAgent,
+    selectedPlaygroundAgentId,
+    setSelectedPlaygroundAgentId,
     activeView: activeViewState,
     setActiveView,
     notification,

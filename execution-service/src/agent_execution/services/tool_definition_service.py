@@ -2,14 +2,20 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from agent_execution.schemas.runtime import AgentToolRef, KnowledgeBaseMode, KnowledgeBaseRef, RuntimeManifest
+from agent_execution.schemas.runtime import (
+    AgentToolRef,
+    KnowledgeBaseMode,
+    KnowledgeBaseRef,
+    RemoteMcpServerConfig,
+    RuntimeManifest,
+)
 
 
 class ToolDefinitionService:
     @staticmethod
     def build_openai_tools(manifest: RuntimeManifest) -> list[dict[str, Any]]:
         tools: list[dict[str, Any]] = []
-        for tool in manifest.tools:
+        for tool in ToolDefinitionService.iter_tools(manifest):
             name = ToolDefinitionService.sanitize_name(tool.tool_name or str(tool.tool_id))
             tools.append(
                 {
@@ -55,11 +61,26 @@ class ToolDefinitionService:
         return cleaned[:64] or "tool"
 
     @staticmethod
+    def iter_tools(manifest: RuntimeManifest) -> list[AgentToolRef]:
+        nested = [tool for server in manifest.remote_mcp_servers for tool in server.tools]
+        return [*manifest.tools, *nested]
+
+    @staticmethod
+    def find_remote_server(
+        manifest: RuntimeManifest, tool_id
+    ) -> RemoteMcpServerConfig | None:
+        wanted = str(tool_id).lower()
+        for server in manifest.remote_mcp_servers:
+            if any(str(tool.tool_id).lower() == wanted for tool in server.tools):
+                return server
+        return None
+
+    @staticmethod
     def resolve_llm_tool_name(
         manifest: RuntimeManifest, llm_name: str
     ) -> tuple[Literal["tool", "kb"], AgentToolRef | KnowledgeBaseRef] | None:
         normalized = llm_name.strip().lower()
-        for tool in manifest.tools:
+        for tool in ToolDefinitionService.iter_tools(manifest):
             candidates = {
                 ToolDefinitionService.sanitize_name(tool.tool_name or str(tool.tool_id)).lower(),
                 (tool.tool_name or "").lower(),

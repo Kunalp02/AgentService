@@ -18,6 +18,8 @@ import {
 import { usePlatform } from '../../context/PlatformContext';
 import { groupName } from '@/src/api/groupDirectory';
 import { BACKEND_DISPLAY_URL } from '../../config/api';
+import Logo from "../../assets/images/logo_light.svg";
+import DarkLogo from "../../assets/images/logo_dark.svg";
 
 export const Header: React.FC = () => {
   const {

@@ -1,7 +1,6 @@
 
 import { authTokenStore } from "./authTokenStore";
 import { serviceUrl } from "../config/api";
-import { handleUnauthorized } from "./sessionGuard";
 import type {
   AgentDto,
   AgentEditorOptionsDto,
@@ -49,7 +48,6 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   });
   const data = await parseBody(r);
-  if (r.status === 401) handleUnauthorized(token);
   if (!r.ok) throw new Error(messageOf(r.status, data));
   if (r.status === 204) return undefined as T;
   return data as T;

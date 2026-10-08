@@ -116,10 +116,27 @@ export interface ToolOptionDto {
   groupIds: string[];
 }
 
+export interface RemoteMcpToolOptionDto {
+  id: string;
+  name: string;
+  description?: string | null;
+}
+
+export interface RemoteMcpServerOptionDto {
+  id: string;
+  name: string;
+  remoteMcpServerUrl?: string | null;
+  transportType?: string | null;
+  authOption?: string | null;
+  groupIds: string[];
+  tools: RemoteMcpToolOptionDto[];
+}
+
 export interface AgentEditorOptionsDto {
   models: ModelOptionDto[];
   knowledgeBases: KnowledgeBaseOptionDto[];
   tools: ToolOptionDto[];
+  remoteMcpServers: RemoteMcpServerOptionDto[];
   availability: {
     toolsConfigReachable: boolean;
     ragConfigReachable: boolean;
@@ -294,6 +311,11 @@ export function normalizeEditorOptions(raw: any): AgentEditorOptionsDto {
   const tools = Array.isArray(raw?.tools ?? raw?.Tools)
     ? (raw.tools ?? raw.Tools)
     : [];
+  const remoteMcpServers = Array.isArray(
+    raw?.remoteMcpServers ?? raw?.RemoteMcpServers,
+  )
+    ? (raw.remoteMcpServers ?? raw.RemoteMcpServers)
+    : [];
   const availability = raw?.availability ?? raw?.Availability ?? {};
   return {
     models: models
@@ -316,6 +338,35 @@ export function normalizeEditorOptions(raw: any): AgentEditorOptionsDto {
         groupIds: asIdList(t.groupIds ?? t.GroupIds),
       }))
       .filter((t: ToolOptionDto) => t.id),
+    remoteMcpServers: remoteMcpServers
+      .map((server: any) => {
+        const id = String(server?.id ?? server?.Id ?? "").trim();
+        if (!id) return null;
+        const nested = Array.isArray(server?.tools ?? server?.Tools)
+          ? (server.tools ?? server.Tools)
+          : [];
+        return {
+          id,
+          name: String(server?.name ?? server?.Name ?? id),
+          remoteMcpServerUrl:
+            server?.remoteMcpServerUrl ?? server?.RemoteMcpServerUrl ?? null,
+          transportType: server?.transportType ?? server?.TransportType ?? null,
+          authOption: server?.authOption ?? server?.AuthOption ?? null,
+          groupIds: asIdList(server?.groupIds ?? server?.GroupIds),
+          tools: nested
+            .map((tool: any) => {
+              const toolId = String(tool?.id ?? tool?.Id ?? "").trim();
+              if (!toolId) return null;
+              return {
+                id: toolId,
+                name: String(tool?.name ?? tool?.Name ?? toolId),
+                description: tool?.description ?? tool?.Description ?? null,
+              };
+            })
+            .filter(Boolean),
+        };
+      })
+      .filter(Boolean) as RemoteMcpServerOptionDto[],
     availability: {
       toolsConfigReachable: Boolean(
         availability.toolsConfigReachable ?? availability.ToolsConfigReachable,

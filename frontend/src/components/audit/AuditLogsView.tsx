@@ -1,140 +1,4 @@
 
-// import React, { useState } from 'react';
-// import {
-//   FileCode,
-//   ShieldCheck,
-//   Search,
-//   Filter,
-//   Calendar,
-//   User,
-//   Clock,
-//   CheckCircle2,
-//   AlertTriangle,
-//   ArrowDownRight,
-// } from 'lucide-react';
-// import { usePlatform } from '../../context/PlatformContext';
-
-// export const AuditLogsView: React.FC = () => {
-//   const { auditLogs, theme, setTheme } = usePlatform();
-//   const [searchFilter, setSearchFilter] = useState('');
-//   const [actionFilter, setActionFilter] = useState('ALL');
-
-//   const filteredLogs = auditLogs.filter((log) => {
-//     const matchesSearch =
-//       log.userName.toLowerCase().includes(searchFilter.toLowerCase()) ||
-//       log.userWindowsId.toLowerCase().includes(searchFilter.toLowerCase()) ||
-//       log.details.toLowerCase().includes(searchFilter.toLowerCase()) ||
-//       log.action.toLowerCase().includes(searchFilter.toLowerCase());
-
-//     const matchesAction = actionFilter === 'ALL' || log.action === actionFilter;
-
-//     return matchesSearch && matchesAction;
-//   });
-
-//   const uniqueActions = Array.from(new Set(auditLogs.map((l) => l.action)));
-
-//   return (
-//     <div id="audit-logs-view" className={`p-5 space-y-5 max-w-7xl mx-auto `}>
-//       <div className={`panel ${theme === 'light' ? 'backdrop-blur-lg bg-slate-950/5 border-neutral-900/5 shadow-none' : 'backdrop-blur-lg bg-slate-100/5 border-neutral-100/10'}`}>
-//       {/* View Header */}
-//       <div className={`flex flex-col sm:flex-row sm:items-center justify-between gap-4`}>
-//         <div>
-//           <div className="flex items-center gap-2">
-//             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full bg-indigo-500/20 border border-indigo-500/30 ${theme === 'light' ? 'text-indigo-800' : 'text-indigo-300'}`}>
-//               SOC-2 Type II Compliance
-//             </span>
-//             <span className={`text-xs ${theme === 'light' ? 'text-slate-600' : 'text-slate-400'}`}>Immutable Telemetry Logs</span>
-//           </div>
-//           <h1 className={`header ${theme === 'light' ? 'text-sky-950' : 'text-sky-50'}`}>
-//             Enterprise Security & Audit Trail
-//           </h1>
-//           <p className={`header-disciption max-w-full ${theme === 'light' ? 'text-gray-800' : 'text-gray-200'}`}>
-//             Comprehensive tamper-proof audit trail capturing Windows AD logins, role modifications, Python AST tool approvals, and agent dispatch events.
-//           </p>
-//         </div>
-
-//         <div className={`text-right text-slate-400 text-xs  ${theme === 'light' ? 'text-slate-600' : 'text-slate-400'}`}>
-//           Total Logged Events: <span className={`font-bold ${theme === 'light' ? 'text-gray-800' : 'text-gray-200'}`}>{auditLogs.length}</span>
-//         </div>
-//       </div>
-
-//       {/* Filters Bar */}
-//       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-2 ">
-//         <div className="relative flex-1 w-full">
-//           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-//           <input
-//             type="text"
-//             value={searchFilter}
-//             onChange={(e) => setSearchFilter(e.target.value)}
-//             placeholder="Search by Windows ID, user name, action, or details..."
-//             className={`${theme === 'light' ? 'input-base-light' : 'input-base-dark'}`} />
-//         </div>
-
-//         <div className="flex items-center gap-2 w-full sm:w-auto">
-//           <select
-//             value={actionFilter}
-//             onChange={(e) => setActionFilter(e.target.value)}
-//             className={`pl-3 ${theme === 'light' ? 'input-base-light' : 'input-base-dark'}`}
-//           >
-//             <option value="ALL">All Action Events ({auditLogs.length})</option>
-//             {uniqueActions.map((action) => (
-//               <option key={action} value={action}>
-//                 {action}
-//               </option>
-//             ))}
-//           </select>
-//         </div>
-//       </div>
-
-//       {/* Audit Log Table */}
-//       <div className="overflow-hidden mt-2 ">
-//         <div className="overflow-x-auto">
-//           <table className={`table-class`}>
-//             <thead className={` ${theme === 'light' ? 'thead-light' : 'thead-dark'}`}>
-//               <tr>
-//                 <th>Timestamp</th>
-//                 <th>Actor (Windows ID)</th>
-//                 <th>Action Event</th>
-//                 <th>IP / Host</th>
-//                 <th>Event Details</th>
-//               </tr>
-//             </thead>
-//             <tbody className={`divide-y ${theme === 'light' ? 'table-body-light' : 'table-body-dark'}`}>
-//               {filteredLogs.map((log) => (
-//                 <tr key={log.id} className={`transition-colors ${theme === 'light' ? 'hover:bg-slate-200/50' : 'hover:bg-slate-800/50'}`}>
-//                   <td className="whitespace-nowrap">
-//                     {new Date(log.timestamp).toLocaleString()}
-//                   </td>
-
-//                   <td>
-//                     <div className={`font-semibold ${theme === 'light' ? 'text-gray-800' : 'text-gray-100'}`}>{log.userName}</div>
-//                     <div className={`text-xs  ${theme === 'light' ? 'text-slate-600' : 'text-slate-400'}`}>{log.userWindowsId}</div>
-//                   </td>
-
-//                   <td>
-//                     <span className={`px-2 py-0.5 rounded border font-bold ${theme === 'light' ? 'border-blue-400/50 bg-blue-200/50 ' : 'border-blue-500/50 bg-blue-600/30'}`}>
-//                       {log.action}
-//                     </span>
-//                   </td>
-
-//                   <td>
-//                     {log.ipAddress}
-//                   </td>
-
-//                   <td className="max-w-md truncate">
-//                     {log.details}
-//                   </td>
-//                 </tr>
-//               ))}
-//             </tbody>
-//           </table>
-//         </div>
-//       </div>
-//       </div>
-//     </div>
-//   );
-// };
-
 import React, { useEffect, useState } from "react";
 import { RefreshCw, Search } from "lucide-react";
 import { usePlatform } from "../../context/PlatformContext";
@@ -144,10 +8,8 @@ import {
   AuditRunDetail,
   AuditRunItem,
 } from "../../api/execution";
-import { useGetAgentsQuery } from "../../store/agentApi";
 import { DataTable, Drawer, Panel } from "../../rag/Overlays";
 import { BTN, HELP, INPUT, Pill } from "../../rag/RagUI";
-import { PERMISSIONS } from "../../config/permissions";
 
 const PAGE = 25;
 const tone = (s: string) =>
@@ -193,17 +55,7 @@ const Pre: React.FC<{ text?: string | null; tone?: string }> = ({
 );
 
 export const AuditLogsView: React.FC = () => {
-  const { theme, hasPermission } = usePlatform();
-  const canViewAgents = hasPermission(PERMISSIONS.Agent.View);
-  const {
-    currentData: agentResult,
-    isLoading: agentsLoading,
-    isError: agentsError,
-  } = useGetAgentsQuery(
-    { page: 1, pageSize: 200 },
-    { skip: !canViewAgents },
-  );
-  const agents = agentResult?.items ?? [];
+  const { agents, theme } = usePlatform();
   const [agentId, setAgentId] = useState("");
   const [f, setF] = useState({
     status: "",
@@ -300,17 +152,7 @@ export const AuditLogsView: React.FC = () => {
               setPage(0);
             }}
           >
-            {!agents.length && (
-              <option value="">
-                {agentsLoading
-                  ? "Loading agents…"
-                  : agentsError
-                    ? "Could not load agents"
-                    : !canViewAgents
-                      ? "Agent view permission required"
-                    : "No agents available"}
-              </option>
-            )}
+            {!agents.length && <option value="">No agents available</option>}
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}

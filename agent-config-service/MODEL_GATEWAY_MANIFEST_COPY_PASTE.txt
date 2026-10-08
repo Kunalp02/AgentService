@@ -1,0 +1,112 @@
+MODEL GATEWAY ON RUNTIME MANIFEST — COPY/PASTE
+==============================================
+
+Only the model-registry resolve change. Apply these three snippets on top of the agent service you already have.
+Do not replace whole files.
+
+POST /api/v1/model-registry/resolve fields copied onto runtime-manifest.model:
+
+  gatewayUrl        -> model.baseUrl
+  gatewayId         -> model.gatewayId
+  apiKey            -> model.apiKey
+  modelIdentifier   -> model.modelIdentifier when the resolve response has one
+
+apiKey is not included in manifestHash.
+Editor options are unchanged.
+
+
+==============================================================================
+FILE PATH: src/Agent.Application/DTOs/RuntimeManifestDtos.cs
+==============================================================================
+
+ACTION: Replace the RuntimeModelConfigDto record.
+
+FIND:
+
+public record RuntimeModelConfigDto(
+        Guid ModelId,
+        string? Name,
+        string ModelIdentifier,
+        string Provider,
+        string? BaseUrl,
+        IReadOnlyCollection<Guid> GroupIds
+);
+
+REPLACE WITH:
+
+public record RuntimeModelConfigDto(
+        Guid ModelId,
+        string? Name,
+        string ModelIdentifier,
+        string Provider,
+        string? BaseUrl,
+        IReadOnlyCollection<Guid> GroupIds,
+        Guid? GatewayId = null,
+        string? ApiKey = null
+);
+
+
+==============================================================================
+FILE PATH: src/Agent.Application/Services/AgentService.cs
+==============================================================================
+
+ACTION: Inside GetRuntimeManifestAsync, replace the block that copies only GatewayUrl.
+
+FIND:
+
+        if (resolved is not null && !string.IsNullOrWhiteSpace(resolved.GatewayUrl))
+        {
+            modelConfig = modelConfig with { BaseUrl = resolved.GatewayUrl };
+        }
+
+REPLACE WITH:
+
+        if (resolved is not null)
+        {
+            var gatewayUrl = string.IsNullOrWhiteSpace(resolved.GatewayUrl)
+                ? modelConfig.BaseUrl
+                : resolved.GatewayUrl;
+            var modelIdentifier = string.IsNullOrWhiteSpace(resolved.ModelIdentifier)
+                ? modelConfig.ModelIdentifier
+                : resolved.ModelIdentifier;
+            modelConfig = modelConfig with
+            {
+                BaseUrl = gatewayUrl,
+                ModelIdentifier = modelIdentifier,
+                GatewayId = resolved.GatewayId == Guid.Empty ? null : resolved.GatewayId,
+                ApiKey = string.IsNullOrWhiteSpace(resolved.ApiKey) ? null : resolved.ApiKey,
+            };
+        }
+
+
+==============================================================================
+FILE PATH: src/Agent.Infrastructure/DownstreamClients/HttpToolsConfigClient.cs
+==============================================================================
+
+ACTION: Inside ResolveModelAsync, deserialize gatewayId / gatewayUrl / apiKey case-insensitively.
+
+FIND:
+
+            var dto = await response.Content.ReadFromJsonAsync<ModelResolveDto>(cancellationToken: ct);
+
+REPLACE WITH:
+
+            var dto = await response.Content.ReadFromJsonAsync<ModelResolveDto>(
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true },
+                ct);
+
+
+==============================================================================
+RESULT ON GET /api/v1/agents/{id}/runtime-manifest
+==============================================================================
+
+"model": {
+  "modelId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+  "name": "GPT-4o",
+  "modelIdentifier": "gpt-4o",
+  "provider": "openai",
+  "baseUrl": "https://gateway.internal",
+  "gatewayId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+  "apiKey": "the-key-from-model-registry-resolve",
+  "groupIds": ["ab9ea609-c290-4ceb-87df-f7d7077858f0"]
+}
