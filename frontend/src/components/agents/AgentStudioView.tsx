@@ -4,6 +4,8 @@ import {
   AlertCircle,
   Bot,
   Check,
+  ChevronDown,
+  ChevronRight,
   Lock,
   Plus,
   RefreshCw,
@@ -90,6 +92,7 @@ export const AgentStudioView: React.FC = () => {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [formTab, setFormTab] = useState<FormTabKey>("access");
   const [modalOpen, setModalOpen] = useState(false);
+  const [openRemoteServerIds, setOpenRemoteServerIds] = useState<string[]>([]);
 
   const readOnly = mode === "edit" && !canEdit;
 
@@ -1011,29 +1014,55 @@ export const AgentStudioView: React.FC = () => {
                     </div>
 
                     <div className="space-y-2 max-h-64 overflow-auto rounded-lg border border-slate-800 p-2">
-                      {remoteServers.map((server) => (
-                        <div key={server.id} className="rounded-md border border-slate-800">
-                          <div className="px-2 py-1 text-[11px] font-semibold text-slate-200 bg-slate-900/60">
-                            {server.name}
+                      {remoteServers.map((server) => {
+                        const open = openRemoteServerIds.includes(server.id);
+                        const selectedCount = server.tools.filter((t) =>
+                          form.tools.some((x) => x.toolId === t.id),
+                        ).length;
+                        return (
+                          <div key={server.id} className="rounded-md border border-slate-800">
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[11px] font-semibold text-slate-200 bg-slate-900/60"
+                              onClick={() =>
+                                setOpenRemoteServerIds((current) =>
+                                  current.includes(server.id)
+                                    ? current.filter((id) => id !== server.id)
+                                    : [...current, server.id],
+                                )
+                              }
+                            >
+                              {open ? (
+                                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                              ) : (
+                                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                              )}
+                              <span className="min-w-0 flex-1 truncate">{server.name}</span>
+                              <span className="text-[10px] font-medium text-slate-500">
+                                {selectedCount}/{server.tools.length}
+                              </span>
+                            </button>
+                            {open && (
+                              <div className="space-y-1 border-t border-slate-800 p-2">
+                                {server.tools.map((t) => (
+                                  <label
+                                    key={t.id}
+                                    className="flex items-center gap-2 text-[11px] text-slate-300 py-1"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={form.tools.some((x) => x.toolId === t.id)}
+                                      onChange={() => toggleTool(t.id, "Remote")}
+                                      disabled={readOnly}
+                                    />
+                                    {t.name}
+                                  </label>
+                                ))}
+                              </div>
+                            )}
                           </div>
-                          <div className="space-y-1 p-2">
-                            {server.tools.map((t) => (
-                              <label
-                                key={t.id}
-                                className="flex items-center gap-2 text-[11px] text-slate-300 py-1"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={form.tools.some((x) => x.toolId === t.id)}
-                                  onChange={() => toggleTool(t.id, "Remote")}
-                                  disabled={readOnly}
-                                />
-                                {t.name}
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
 
                       {remoteServers.length === 0 &&
                         remoteTools.map((t) => (
