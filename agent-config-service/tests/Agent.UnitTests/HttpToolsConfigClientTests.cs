@@ -99,6 +99,46 @@ public class HttpToolsConfigClientTests
         result.Status.Should().Be(ReferenceCheckStatus.NotVisible);
     }
 
+    [Fact]
+    public async Task GetAvailableTools_FallsBackToActiveForUse_AndReadsPascalCaseTools()
+    {
+        var forUse = """
+            [
+              {
+                "Id": "22222222-2222-2222-2222-222222222222",
+                "Name": "mcp-server",
+                "Status": "Active",
+                "GroupIds": ["ab9ea609-c290-4ceb-87df-f7d7077858f0"],
+                "Tools": [
+                  { "Id": "11111111-1111-1111-1111-111111111111", "Name": "search" }
+                ]
+              }
+            ]
+            """;
+
+        var handler = new StubHandler(req =>
+        {
+            var path = req.RequestUri!.AbsolutePath;
+            if (path.EndsWith("/internal/v1/remote-mcp-servers/active", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.Unauthorized);
+            if (path.EndsWith("/api/v1/remote-mcp-servers/active-for-use", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(forUse, Encoding.UTF8, "application/json"),
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var client = CreateClient(handler);
+        var (reachable, tools) = await client.GetAvailableToolsAsync();
+
+        reachable.Should().BeTrue();
+        tools.Should().ContainSingle(t => t.Id == RemoteToolId && t.ToolType == "Remote" && t.Name == "search");
+    }
+
     private sealed class StubHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;

@@ -107,12 +107,15 @@ public class AgentsController : CCILControllerBase
 
         bool InScope(IEnumerable<Guid>? ids)
         {
+            // No groupIds query means return every option the caller can already see.
+            if (scope.Count == 0)
+                return true;
             if (ids is null)
-                return scope.Count == 0;
+                return true;
             var list = ids as IReadOnlyCollection<Guid> ?? ids.ToList();
             if (list.Count == 0)
                 return true;
-            return scope.Count > 0 && list.Any(scope.Contains);
+            return list.Any(scope.Contains);
         }
 
         return Ok(options with

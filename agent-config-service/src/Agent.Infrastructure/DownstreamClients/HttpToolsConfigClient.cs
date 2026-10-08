@@ -238,6 +238,7 @@ public class HttpToolsConfigClient : IToolsConfigClient
     private sealed record RemoteMcpToolSnapshot(Guid Id, string Name);
 
     private sealed record RemoteMcpServerSnapshot(
+        Guid Id,
         string Name,
         HashSet<Guid> GroupIds,
         IReadOnlyList<RemoteMcpToolSnapshot> Tools);
@@ -371,36 +372,87 @@ public class HttpToolsConfigClient : IToolsConfigClient
     private async Task<(bool Reachable, IReadOnlyList<RemoteMcpServerSnapshot> Servers)> FetchActiveRemoteMcpServersAsync(
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(_internalServiceKey))
-            return (false, Array.Empty<RemoteMcpServerSnapshot>());
+        var anyReachable = false;
+        var best = Array.Empty<RemoteMcpServerSnapshot>();
 
+        if (!string.IsNullOrWhiteSpace(_internalServiceKey))
+        {
+            var internalResult = await TryFetchRemoteServersAsync(ActiveRemoteMcpPath, useServiceKey: true, ct);
+            if (internalResult.Reachable)
+            {
+                anyReachable = true;
+                best = internalResult.Servers;
+                if (CountTools(best) > 0)
+                    return (true, best);
+            }
+        }
+        else
+        {
+            _logger.LogWarning(
+                "ToolsConfigService:InternalServiceKey is empty. Falling back to /api/v1/remote-mcp-servers/active-for-use with the caller token.");
+        }
+
+        // Agent editor listing uses the caller's JWT. This payload includes tools, groupIds, and remoteMcpServerUrl.
+        var forUse = await TryFetchRemoteServersAsync("/api/v1/remote-mcp-servers/active-for-use", useServiceKey: false, ct);
+        if (forUse.Reachable)
+        {
+            anyReachable = true;
+            if (CountTools(forUse.Servers) > 0 || best.Length == 0)
+                best = forUse.Servers;
+            if (CountTools(best) > 0)
+                return (true, best);
+        }
+
+        best = await HydrateMissingToolsAsync(best, ct);
+        if (CountTools(best) == 0)
+        {
+            _logger.LogWarning(
+                "Remote MCP lookup returned {ServerCount} server(s) and 0 tools. Check ToolsConfigService:InternalServiceKey and that active servers have a tools array.",
+                best.Length);
+        }
+
+        return (anyReachable, best);
+    }
+
+    private async Task<(bool Reachable, RemoteMcpServerSnapshot[] Servers)> TryFetchRemoteServersAsync(
+        string path,
+        bool useServiceKey,
+        CancellationToken ct)
+    {
         try
         {
-            using var request = BuildInternalRemoteMcpRequest();
-            _logger.LogInformation("Calling Tools Config remote MCP endpoint: {Path}", ActiveRemoteMcpPath);
+            using var request = useServiceKey
+                ? BuildInternalRemoteMcpRequest()
+                : BuildRequest(HttpMethod.Get, path);
 
+            _logger.LogInformation("Calling Tools Config remote MCP endpoint: {Path}", path);
             using var response = await _http.SendAsync(request, ct);
+            var body = await response.Content.ReadAsStringAsync(ct);
             _logger.LogInformation(
-                "Remote MCP endpoint response: StatusCode={StatusCode}, Success={Success}",
+                "Remote MCP endpoint response: Path={Path}, StatusCode={StatusCode}, BodyLength={BodyLength}",
+                path,
                 (int)response.StatusCode,
-                response.IsSuccessStatusCode);
+                body.Length);
 
             if (IsAuthOrServerFailure(response.StatusCode) || !response.IsSuccessStatusCode)
             {
                 _logger.LogWarning(
-                    "tools_config returned {Status} for {Path}",
+                    "tools_config returned {Status} for {Path}. Body={Body}",
                     response.StatusCode,
-                    ActiveRemoteMcpPath);
+                    path,
+                    TrimForLog(body));
                 return (false, Array.Empty<RemoteMcpServerSnapshot>());
             }
 
-            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "[]" : body);
             var list = doc.RootElement.UnwrapList();
             if (list.ValueKind != JsonValueKind.Array)
             {
                 _logger.LogWarning(
-                    "Remote MCP response root is not an array after unwrap. ValueKind={ValueKind}",
-                    list.ValueKind);
+                    "Remote MCP response for {Path} is not an array. ValueKind={ValueKind} Body={Body}",
+                    path,
+                    list.ValueKind,
+                    TrimForLog(body));
                 return (true, Array.Empty<RemoteMcpServerSnapshot>());
             }
 
@@ -408,7 +460,12 @@ public class HttpToolsConfigClient : IToolsConfigClient
             foreach (var server in list.EnumerateArray())
                 servers.Add(ParseRemoteMcpServer(server));
 
-            return (true, servers);
+            _logger.LogInformation(
+                "Parsed remote MCP servers from {Path}: Servers={ServerCount}, Tools={ToolCount}",
+                path,
+                servers.Count,
+                CountTools(servers));
+            return (true, servers.ToArray());
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -416,42 +473,89 @@ public class HttpToolsConfigClient : IToolsConfigClient
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "tools_config unreachable while fetching active remote MCP servers.");
+            _logger.LogWarning(ex, "tools_config unreachable while fetching {Path}", path);
             return (false, Array.Empty<RemoteMcpServerSnapshot>());
+        }
+    }
+
+    private async Task<RemoteMcpServerSnapshot[]> HydrateMissingToolsAsync(
+        IReadOnlyList<RemoteMcpServerSnapshot> servers,
+        CancellationToken ct)
+    {
+        if (servers.Count == 0 || CountTools(servers) > 0)
+            return servers as RemoteMcpServerSnapshot[] ?? servers.ToArray();
+
+        var hydrated = new List<RemoteMcpServerSnapshot>(servers.Count);
+        foreach (var server in servers)
+        {
+            if (server.Tools.Count > 0 || server.Id == Guid.Empty)
+            {
+                hydrated.Add(server);
+                continue;
+            }
+
+            var detail = await TryFetchServerByIdAsync(server.Id, ct);
+            hydrated.Add(detail ?? server);
+        }
+
+        return hydrated.ToArray();
+    }
+
+    private async Task<RemoteMcpServerSnapshot?> TryFetchServerByIdAsync(Guid serverId, CancellationToken ct)
+    {
+        try
+        {
+            using var response = await _http.SendAsync(
+                BuildRequest(HttpMethod.Get, $"/api/v1/remote-mcp-servers/{serverId}"), ct);
+            if (!response.IsSuccessStatusCode)
+                return null;
+
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return null;
+            return ParseRemoteMcpServer(doc.RootElement);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load remote MCP server {ServerId}", serverId);
+            return null;
         }
     }
 
     private RemoteMcpServerSnapshot ParseRemoteMcpServer(JsonElement server)
     {
+        server.TryReadGuid("id", out var serverId);
         var serverName = server.ReadString("name");
         var serverGroupIds = server.ReadGuidArray("groupIds");
         var status = server.ReadString("status");
 
-        if (!IsActiveRemoteServerStatus(status))
+        if (IsInactiveRemoteServerStatus(status))
         {
-            _logger.LogDebug(
+            _logger.LogInformation(
                 "Skipping remote MCP server {ServerName} with status {Status}",
                 serverName,
                 status);
-            return new RemoteMcpServerSnapshot(serverName, serverGroupIds, Array.Empty<RemoteMcpToolSnapshot>());
+            return new RemoteMcpServerSnapshot(serverId, serverName, serverGroupIds, Array.Empty<RemoteMcpToolSnapshot>());
         }
 
-        _logger.LogInformation(
-            "Remote MCP server: Name={ServerName}, Url={Url}, Groups=[{Groups}]",
-            serverName,
-            server.ReadString("remoteMcpServerUrl"),
-            string.Join(",", serverGroupIds));
-
-        if (!server.TryGetProperty("tools", out var tools) || tools.ValueKind != JsonValueKind.Array)
+        if (!server.TryGetPropertyIgnoreCase("tools", out var tools) || tools.ValueKind != JsonValueKind.Array)
         {
-            _logger.LogWarning("Remote MCP server {ServerName} has no tools array.", serverName);
-            return new RemoteMcpServerSnapshot(serverName, serverGroupIds, Array.Empty<RemoteMcpToolSnapshot>());
+            _logger.LogWarning(
+                "Remote MCP server {ServerName} ({ServerId}) has no tools array. Url={Url}",
+                serverName,
+                serverId,
+                server.ReadString("remoteMcpServerUrl"));
+            return new RemoteMcpServerSnapshot(serverId, serverName, serverGroupIds, Array.Empty<RemoteMcpToolSnapshot>());
         }
 
         var parsedTools = new List<RemoteMcpToolSnapshot>();
         foreach (var tool in tools.EnumerateArray())
         {
-            if (!tool.TryReadGuid("id", out var toolId))
+            if (!tool.TryReadGuid("id", out var toolId) && !tool.TryReadGuid("toolId", out toolId))
             {
                 _logger.LogWarning(
                     "Skipping remote tool because tool ID is invalid. Server={ServerName}",
@@ -460,18 +564,26 @@ public class HttpToolsConfigClient : IToolsConfigClient
             }
 
             var toolName = tool.ReadString("name");
-            _logger.LogInformation(
-                "Remote tool found: Server={ServerName}, Tool={ToolName}, ToolId={ToolId}, Groups=[{Groups}]",
-                serverName,
-                toolName,
-                toolId,
-                string.Join(",", serverGroupIds));
+            if (string.IsNullOrWhiteSpace(toolName))
+                toolName = tool.ReadString("toolName");
 
             parsedTools.Add(new RemoteMcpToolSnapshot(toolId, toolName));
         }
 
-        return new RemoteMcpServerSnapshot(serverName, serverGroupIds, parsedTools);
+        _logger.LogInformation(
+            "Remote MCP server {ServerName} parsed {ToolCount} tools. Groups=[{Groups}]",
+            serverName,
+            parsedTools.Count,
+            string.Join(",", serverGroupIds));
+
+        return new RemoteMcpServerSnapshot(serverId, serverName, serverGroupIds, parsedTools);
     }
+
+    private static int CountTools(IEnumerable<RemoteMcpServerSnapshot> servers)
+        => servers.Sum(s => s.Tools.Count);
+
+    private static string TrimForLog(string body)
+        => body.Length <= 500 ? body : body[..500];
 
     private static IEnumerable<ToolOptionDto> FlattenRemoteTools(IEnumerable<RemoteMcpServerSnapshot> servers)
     {
@@ -491,9 +603,11 @@ public class HttpToolsConfigClient : IToolsConfigClient
         return resourceGroupIds.Overlaps(agentGroupIds);
     }
 
-    private static bool IsActiveRemoteServerStatus(string status)
-        => string.IsNullOrWhiteSpace(status)
-           || status.Equals("Active", StringComparison.OrdinalIgnoreCase);
+    private static bool IsInactiveRemoteServerStatus(string status)
+        => status.Equals("Inactive", StringComparison.OrdinalIgnoreCase)
+           || status.Equals("Disabled", StringComparison.OrdinalIgnoreCase)
+           || status.Equals("Deleted", StringComparison.OrdinalIgnoreCase)
+           || status.Equals("Draft", StringComparison.OrdinalIgnoreCase);
 
     private static async Task<List<ToolOptionDto>> ReadToolList(HttpResponseMessage response, string toolType, CancellationToken ct)
     {

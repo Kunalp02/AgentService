@@ -1,24 +1,28 @@
 REMOTE MCP TOOLS — .NET AGENT CONFIG COPY/PASTE GUIDE
 ============================================================
 
-Project root: folder containing ccil.ai.platform.AgentConfigService.sln
-(typically agent-config-service/ or your AgentConfigService repo root).
+Replace these files in the AgentConfigService solution (folder with the .sln).
 
-Problem fixed
--------------
-- Editor options already listed remote tools from GET /internal/v1/remote-mcp-servers/active.
-- Create/update still validated Remote tools via GET /api/v1/remote-tools/{id} (not in tools API).
-- Result: remote tools visible in UI but agent save failed validation.
+Why editor-options had no remote tools
+---------------------------------------
+1. Listing called only /internal/v1/remote-mcp-servers/active and returned nothing when InternalServiceKey was missing or rejected (401).
+2. The tools array was read with a case-sensitive "tools" property, so a PascalCase "Tools" payload was ignored.
+3. editor-options dropped every tool that had groupIds when the request had no groupIds query.
 
-Apply sections in order. Paths below are relative to the AgentConfigService solution root.
+What it does now
+----------------
+- Try GET /internal/v1/remote-mcp-servers/active with X-Service-Key when InternalServiceKey is set.
+- If that returns no tools, fall back to GET /api/v1/remote-mcp-servers/active-for-use using the caller Bearer token (this is what fills the UI).
+- If a server has an id but no tools array, load GET /api/v1/remote-mcp-servers/{id}.
+- Read tools/Tools and id/Id case-insensitively.
+
+Still set ToolsConfigService:InternalServiceKey to LocalMcpRuntime:ApiKey so create/validate can use the internal payload (base URL, api key).
 
 ==============================================================================
-FILE PATH: Config_AIAgent.cnf  (inside <JSONCONFIG> block)
+FILE PATH: Config_AIAgent.cnf
 ==============================================================================
 
-ACTION: Add InternalServiceKey under ToolsConfigService (must match tools service LocalMcpRuntime:ApiKey).
-
-UPDATED SNIPPET (replace your ToolsConfigService block):
+ACTION: Inside JSONCONFIG, ToolsConfigService must include InternalServiceKey.
 
             "ToolsConfigService":{
                 "BaseUrl": "http://172.19.204.37:8502",
@@ -26,33 +30,10 @@ UPDATED SNIPPET (replace your ToolsConfigService block):
             },
 
 ==============================================================================
-FILE PATH: tests/Agent.IntegrationTests/AgentApiFactory.cs
-==============================================================================
-
-ACTION: Optional — only if you run integration tests. Inside ConfigureWebHost in-memory config, add:
-
-                ["ToolsConfigService:BaseUrl"] = "http://localhost:5002",
-                ["ToolsConfigService:InternalServiceKey"] = "test-internal-key",
-
-==============================================================================
-FILE PATH: src/Agent.Application/Services/AgentService.cs
-==============================================================================
-
-ACTION: Optional cleanup inside ValidateReferencesAsync — remove debug logging if present.
-
-FIND (delete this line if you still have it):
-
-        Console.WriteLine(groups);
-
-No other AgentService changes are required for remote tools.
-
-==============================================================================
 FILE PATH: src/Agent.Infrastructure/DownstreamClients/JsonElementExtensions.cs
 ==============================================================================
 
-ACTION: REQUIRED. Create this file if missing (or replace entire file).
-HttpToolsConfigClient depends on these JsonElement extension methods:
-TryReadGuid, ReadString, ReadGuidArray, UnwrapList.
+ACTION: Replace the entire file.
 
 ```csharp
 
@@ -178,7 +159,7 @@ internal static class JsonElementExtensions
 FILE PATH: src/Agent.Infrastructure/DownstreamClients/HttpToolsConfigClient.cs
 ==============================================================================
 
-ACTION: Replace the entire file with the code below.
+ACTION: Replace the entire file.
 
 ```csharp
 
@@ -421,6 +402,7 @@ public class HttpToolsConfigClient : IToolsConfigClient
     private sealed record RemoteMcpToolSnapshot(Guid Id, string Name);
 
     private sealed record RemoteMcpServerSnapshot(
+        Guid Id,
         string Name,
         HashSet<Guid> GroupIds,
         IReadOnlyList<RemoteMcpToolSnapshot> Tools);
@@ -554,36 +536,87 @@ public class HttpToolsConfigClient : IToolsConfigClient
     private async Task<(bool Reachable, IReadOnlyList<RemoteMcpServerSnapshot> Servers)> FetchActiveRemoteMcpServersAsync(
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(_internalServiceKey))
-            return (false, Array.Empty<RemoteMcpServerSnapshot>());
+        var anyReachable = false;
+        var best = Array.Empty<RemoteMcpServerSnapshot>();
 
+        if (!string.IsNullOrWhiteSpace(_internalServiceKey))
+        {
+            var internalResult = await TryFetchRemoteServersAsync(ActiveRemoteMcpPath, useServiceKey: true, ct);
+            if (internalResult.Reachable)
+            {
+                anyReachable = true;
+                best = internalResult.Servers;
+                if (CountTools(best) > 0)
+                    return (true, best);
+            }
+        }
+        else
+        {
+            _logger.LogWarning(
+                "ToolsConfigService:InternalServiceKey is empty. Falling back to /api/v1/remote-mcp-servers/active-for-use with the caller token.");
+        }
+
+        // Agent editor listing uses the caller's JWT. This payload includes tools, groupIds, and remoteMcpServerUrl.
+        var forUse = await TryFetchRemoteServersAsync("/api/v1/remote-mcp-servers/active-for-use", useServiceKey: false, ct);
+        if (forUse.Reachable)
+        {
+            anyReachable = true;
+            if (CountTools(forUse.Servers) > 0 || best.Length == 0)
+                best = forUse.Servers;
+            if (CountTools(best) > 0)
+                return (true, best);
+        }
+
+        best = await HydrateMissingToolsAsync(best, ct);
+        if (CountTools(best) == 0)
+        {
+            _logger.LogWarning(
+                "Remote MCP lookup returned {ServerCount} server(s) and 0 tools. Check ToolsConfigService:InternalServiceKey and that active servers have a tools array.",
+                best.Length);
+        }
+
+        return (anyReachable, best);
+    }
+
+    private async Task<(bool Reachable, RemoteMcpServerSnapshot[] Servers)> TryFetchRemoteServersAsync(
+        string path,
+        bool useServiceKey,
+        CancellationToken ct)
+    {
         try
         {
-            using var request = BuildInternalRemoteMcpRequest();
-            _logger.LogInformation("Calling Tools Config remote MCP endpoint: {Path}", ActiveRemoteMcpPath);
+            using var request = useServiceKey
+                ? BuildInternalRemoteMcpRequest()
+                : BuildRequest(HttpMethod.Get, path);
 
+            _logger.LogInformation("Calling Tools Config remote MCP endpoint: {Path}", path);
             using var response = await _http.SendAsync(request, ct);
+            var body = await response.Content.ReadAsStringAsync(ct);
             _logger.LogInformation(
-                "Remote MCP endpoint response: StatusCode={StatusCode}, Success={Success}",
+                "Remote MCP endpoint response: Path={Path}, StatusCode={StatusCode}, BodyLength={BodyLength}",
+                path,
                 (int)response.StatusCode,
-                response.IsSuccessStatusCode);
+                body.Length);
 
             if (IsAuthOrServerFailure(response.StatusCode) || !response.IsSuccessStatusCode)
             {
                 _logger.LogWarning(
-                    "tools_config returned {Status} for {Path}",
+                    "tools_config returned {Status} for {Path}. Body={Body}",
                     response.StatusCode,
-                    ActiveRemoteMcpPath);
+                    path,
+                    TrimForLog(body));
                 return (false, Array.Empty<RemoteMcpServerSnapshot>());
             }
 
-            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "[]" : body);
             var list = doc.RootElement.UnwrapList();
             if (list.ValueKind != JsonValueKind.Array)
             {
                 _logger.LogWarning(
-                    "Remote MCP response root is not an array after unwrap. ValueKind={ValueKind}",
-                    list.ValueKind);
+                    "Remote MCP response for {Path} is not an array. ValueKind={ValueKind} Body={Body}",
+                    path,
+                    list.ValueKind,
+                    TrimForLog(body));
                 return (true, Array.Empty<RemoteMcpServerSnapshot>());
             }
 
@@ -591,7 +624,12 @@ public class HttpToolsConfigClient : IToolsConfigClient
             foreach (var server in list.EnumerateArray())
                 servers.Add(ParseRemoteMcpServer(server));
 
-            return (true, servers);
+            _logger.LogInformation(
+                "Parsed remote MCP servers from {Path}: Servers={ServerCount}, Tools={ToolCount}",
+                path,
+                servers.Count,
+                CountTools(servers));
+            return (true, servers.ToArray());
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -599,42 +637,89 @@ public class HttpToolsConfigClient : IToolsConfigClient
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "tools_config unreachable while fetching active remote MCP servers.");
+            _logger.LogWarning(ex, "tools_config unreachable while fetching {Path}", path);
             return (false, Array.Empty<RemoteMcpServerSnapshot>());
+        }
+    }
+
+    private async Task<RemoteMcpServerSnapshot[]> HydrateMissingToolsAsync(
+        IReadOnlyList<RemoteMcpServerSnapshot> servers,
+        CancellationToken ct)
+    {
+        if (servers.Count == 0 || CountTools(servers) > 0)
+            return servers as RemoteMcpServerSnapshot[] ?? servers.ToArray();
+
+        var hydrated = new List<RemoteMcpServerSnapshot>(servers.Count);
+        foreach (var server in servers)
+        {
+            if (server.Tools.Count > 0 || server.Id == Guid.Empty)
+            {
+                hydrated.Add(server);
+                continue;
+            }
+
+            var detail = await TryFetchServerByIdAsync(server.Id, ct);
+            hydrated.Add(detail ?? server);
+        }
+
+        return hydrated.ToArray();
+    }
+
+    private async Task<RemoteMcpServerSnapshot?> TryFetchServerByIdAsync(Guid serverId, CancellationToken ct)
+    {
+        try
+        {
+            using var response = await _http.SendAsync(
+                BuildRequest(HttpMethod.Get, $"/api/v1/remote-mcp-servers/{serverId}"), ct);
+            if (!response.IsSuccessStatusCode)
+                return null;
+
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return null;
+            return ParseRemoteMcpServer(doc.RootElement);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load remote MCP server {ServerId}", serverId);
+            return null;
         }
     }
 
     private RemoteMcpServerSnapshot ParseRemoteMcpServer(JsonElement server)
     {
+        server.TryReadGuid("id", out var serverId);
         var serverName = server.ReadString("name");
         var serverGroupIds = server.ReadGuidArray("groupIds");
         var status = server.ReadString("status");
 
-        if (!IsActiveRemoteServerStatus(status))
+        if (IsInactiveRemoteServerStatus(status))
         {
-            _logger.LogDebug(
+            _logger.LogInformation(
                 "Skipping remote MCP server {ServerName} with status {Status}",
                 serverName,
                 status);
-            return new RemoteMcpServerSnapshot(serverName, serverGroupIds, Array.Empty<RemoteMcpToolSnapshot>());
+            return new RemoteMcpServerSnapshot(serverId, serverName, serverGroupIds, Array.Empty<RemoteMcpToolSnapshot>());
         }
 
-        _logger.LogInformation(
-            "Remote MCP server: Name={ServerName}, Url={Url}, Groups=[{Groups}]",
-            serverName,
-            server.ReadString("remoteMcpServerUrl"),
-            string.Join(",", serverGroupIds));
-
-        if (!server.TryGetProperty("tools", out var tools) || tools.ValueKind != JsonValueKind.Array)
+        if (!server.TryGetPropertyIgnoreCase("tools", out var tools) || tools.ValueKind != JsonValueKind.Array)
         {
-            _logger.LogWarning("Remote MCP server {ServerName} has no tools array.", serverName);
-            return new RemoteMcpServerSnapshot(serverName, serverGroupIds, Array.Empty<RemoteMcpToolSnapshot>());
+            _logger.LogWarning(
+                "Remote MCP server {ServerName} ({ServerId}) has no tools array. Url={Url}",
+                serverName,
+                serverId,
+                server.ReadString("remoteMcpServerUrl"));
+            return new RemoteMcpServerSnapshot(serverId, serverName, serverGroupIds, Array.Empty<RemoteMcpToolSnapshot>());
         }
 
         var parsedTools = new List<RemoteMcpToolSnapshot>();
         foreach (var tool in tools.EnumerateArray())
         {
-            if (!tool.TryReadGuid("id", out var toolId))
+            if (!tool.TryReadGuid("id", out var toolId) && !tool.TryReadGuid("toolId", out toolId))
             {
                 _logger.LogWarning(
                     "Skipping remote tool because tool ID is invalid. Server={ServerName}",
@@ -643,18 +728,26 @@ public class HttpToolsConfigClient : IToolsConfigClient
             }
 
             var toolName = tool.ReadString("name");
-            _logger.LogInformation(
-                "Remote tool found: Server={ServerName}, Tool={ToolName}, ToolId={ToolId}, Groups=[{Groups}]",
-                serverName,
-                toolName,
-                toolId,
-                string.Join(",", serverGroupIds));
+            if (string.IsNullOrWhiteSpace(toolName))
+                toolName = tool.ReadString("toolName");
 
             parsedTools.Add(new RemoteMcpToolSnapshot(toolId, toolName));
         }
 
-        return new RemoteMcpServerSnapshot(serverName, serverGroupIds, parsedTools);
+        _logger.LogInformation(
+            "Remote MCP server {ServerName} parsed {ToolCount} tools. Groups=[{Groups}]",
+            serverName,
+            parsedTools.Count,
+            string.Join(",", serverGroupIds));
+
+        return new RemoteMcpServerSnapshot(serverId, serverName, serverGroupIds, parsedTools);
     }
+
+    private static int CountTools(IEnumerable<RemoteMcpServerSnapshot> servers)
+        => servers.Sum(s => s.Tools.Count);
+
+    private static string TrimForLog(string body)
+        => body.Length <= 500 ? body : body[..500];
 
     private static IEnumerable<ToolOptionDto> FlattenRemoteTools(IEnumerable<RemoteMcpServerSnapshot> servers)
     {
@@ -674,9 +767,11 @@ public class HttpToolsConfigClient : IToolsConfigClient
         return resourceGroupIds.Overlaps(agentGroupIds);
     }
 
-    private static bool IsActiveRemoteServerStatus(string status)
-        => string.IsNullOrWhiteSpace(status)
-           || status.Equals("Active", StringComparison.OrdinalIgnoreCase);
+    private static bool IsInactiveRemoteServerStatus(string status)
+        => status.Equals("Inactive", StringComparison.OrdinalIgnoreCase)
+           || status.Equals("Disabled", StringComparison.OrdinalIgnoreCase)
+           || status.Equals("Deleted", StringComparison.OrdinalIgnoreCase)
+           || status.Equals("Draft", StringComparison.OrdinalIgnoreCase);
 
     private static async Task<List<ToolOptionDto>> ReadToolList(HttpResponseMessage response, string toolType, CancellationToken ct)
     {
@@ -706,10 +801,205 @@ public class HttpToolsConfigClient : IToolsConfigClient
 ```
 
 ==============================================================================
+FILE PATH: src/Agent.Api/Controllers/AgentsController.cs
+==============================================================================
+
+ACTION: Replace the entire file.
+
+```csharp
+
+using CCIL.WEBAPI.MIDDLEWARE;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using ccil.ai.platform.common.Auth;
+using ccil.ai.platform.common.Constants;
+using Agent.Application.DTOs;
+using Agent.Application.Groups;
+using Agent.Application.Interfaces;
+using Permissions = Agent.Application.Authorization.Permissions;
+
+namespace Agent.Api.Controllers;
+
+[ApiController]
+[ApiVersion("1.0")]
+[Route("api/v{version:apiVersion}/agents")]
+public class AgentsController : CCILControllerBase
+{
+    private readonly IAgentService _service;
+    private readonly ICurrentUser _currentUser;
+    private readonly ILogger<AgentsController> _logger;
+
+    public AgentsController(IAgentService service, ICurrentUser currentUser, ILogger<AgentsController> logger)
+    {
+        _service = service;
+        _currentUser = currentUser;
+        _logger = logger;
+    }
+
+    [HttpGet]
+    [SessionValidation]
+    [GroupValidation]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Roles = Permissions.Agent.View)]
+    public async Task<ActionResult<PagedResult<AgentListItemDto>>> List([FromQuery] AgentQueryParams query,
+        CancellationToken ct)
+    {
+        _logger.LogInformation("User {UserId} ({username}) groups from the jwt token: {Groups}",
+            _currentUser.UserId,
+            _currentUser.Username,
+            string.Join(", ", _currentUser.Groups));
+
+        return await _service.ListAsync(query, ct);
+    }
+
+    [HttpGet("{id:guid}")]
+    [SessionValidation]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Roles = Permissions.Agent.View)]
+    public async Task<ActionResult<AgentDto>> Get(Guid id, CancellationToken ct) => Ok(await _service.GetAsync(id, ct));
+
+    [HttpGet("groups")]
+    [SessionValidation]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Roles = Permissions.Agent.View)]
+    public async Task<ActionResult<IReadOnlyList<CallerGroupDto>>> CallerGroups(CancellationToken ct)
+        => Ok(await _service.GetCallerGroupsAsync(ct));
+    
+    // [HttpGet("editor-options")]
+    // [SessionValidation]
+    // [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Roles = Permissions.Agent.View)]
+    // public async Task<ActionResult<AgentEditorOptionsDto>> EditorOptions([FromQuery] Guid[]? groupIds, CancellationToken ct)
+    // {
+    //     var options = await _service.GetEditorOptionsAsync(ct);
+    //
+    //     var callerGroups = GroupClaimParser.ParseIds(_currentUser.Groups);
+    //     var scope = (groupIds ?? Array.Empty<Guid>())
+    //         .Where(g => g != Guid.Empty && callerGroups.Contains(g))
+    //         .ToHashSet();
+    //     if (scope.Count == 0)
+    //         scope = callerGroups;
+    //
+    //     bool InScope(IEnumerable<Guid>? ids)
+    //     {
+    //         if (ids is null) return true;
+    //         var list = ids as IReadOnlyCollection<Guid> ?? ids.ToList();
+    //         return list.Count == 0 || list.Any(scope.Contains);
+    //     }
+    //
+    //     return Ok(options with
+    //     {
+    //         Models = options.Models.Where(m => InScope(m.GroupIds)).ToList(),
+    //         KnowledgeBases = options.KnowledgeBases.Where(k => InScope(k.GroupIds)).ToList(),
+    //         Tools = options.Tools.Where(t => InScope(t.GroupIds)).ToList(),
+    //     });
+    // }
+    
+    [HttpGet("editor-options")]
+    [SessionValidation]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Roles = Permissions.Agent.View)]
+    public async Task<ActionResult<AgentEditorOptionsDto>> EditorOptions([FromQuery] Guid[]? groupIds, CancellationToken ct)
+    {
+        var options = await _service.GetEditorOptionsAsync(ct);
+        var scope = (groupIds ?? Array.Empty<Guid>()).Where(g => g != Guid.Empty).ToHashSet();
+
+        var isAdmin = _currentUser.HasPermission("*")
+                      || _currentUser.HasPermission(Agent.Application.Authorization.Permissions.Platform.SuperAdmin);
+        if (!isAdmin && scope.Count > 0)
+        {
+            var callerIds = GroupClaimParser.ParseIds(_currentUser.Groups);
+            foreach (var id in scope)
+            {
+                if (!callerIds.Contains(id))
+                    throw new AppException(ErrorCodes.ValidationFailed,
+                        $"Group {id} is not in your token. You can only load resources for groups you belong to.",
+                        400);
+            }
+        }
+
+        bool InScope(IEnumerable<Guid>? ids)
+        {
+            // No groupIds query means return every option the caller can already see.
+            if (scope.Count == 0)
+                return true;
+            if (ids is null)
+                return true;
+            var list = ids as IReadOnlyCollection<Guid> ?? ids.ToList();
+            if (list.Count == 0)
+                return true;
+            return list.Any(scope.Contains);
+        }
+
+        return Ok(options with
+        {
+            Models         = options.Models.Where(m => InScope(m.GroupIds)).ToList(),
+            KnowledgeBases = options.KnowledgeBases.Where(k => InScope(k.GroupIds)).ToList(),
+            Tools          = options.Tools.Where(t => InScope(t.GroupIds)).ToList(),
+        });
+    }
+
+    [HttpPost]
+    [SessionValidation]
+    [GroupValidation]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Roles = Permissions.Agent.Create)]
+    public async Task<ActionResult<AgentDto>> Create([FromBody] CreateAgentRequest request, CancellationToken ct)
+    {
+        var ownerId = _currentUser.UserId ?? throw new AppException(ErrorCodes.Unauthorized, "Could not resolve caller identity from the current token.", 401);
+        var ownerUsername = _currentUser.Username ?? "unknown";
+        var result = await _service.CreateAsync(request, ownerId, ownerUsername, ct);
+        return CreatedAtAction(nameof(Get), new { id = result.Id, version = "1.0" }, result);
+    }
+
+    [HttpPatch("{id:guid}")]
+    [SessionValidation]
+    [GroupValidation]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Roles = Permissions.Agent.Edit)]
+    public async Task<ActionResult<AgentDto>> Patch(Guid id, [FromBody] PatchAgentRequest request, CancellationToken ct)
+    {
+        var updatedBy = _currentUser.Username ?? "unknown";
+        return Ok(await _service.PatchAsync(id, request, updatedBy, ct));
+    }
+
+    [HttpDelete("{id:guid}")]
+    [SessionValidation]
+    [GroupValidation]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Roles = Permissions.Agent.Delete)]
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] AgentGroupContext groupContext, CancellationToken ct)
+    {
+        await _service.DeleteAsync(id, ct);
+        return NoContent();
+    }
+
+    [HttpPost("{id:guid}/publish")]
+    [SessionValidation]
+    [GroupValidation]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Roles = Permissions.Agent.Publish)]
+    public async Task<ActionResult<AgentDto>> Publish(Guid id, [FromQuery] AgentGroupContext groupContext, CancellationToken ct)
+    {
+        var publishedBy = _currentUser.Username ?? "unknown";
+        return Ok(await _service.PublishAsync(id, publishedBy, ct));
+    }
+
+    [HttpPost("{id:guid}/unpublish")]
+    [SessionValidation]
+    [GroupValidation]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Roles = Permissions.Agent.Publish)]
+    public async Task<ActionResult<AgentDto>> Unpublish(Guid id, [FromQuery] AgentGroupContext groupContext, CancellationToken ct)
+    {
+        var updatedBy = _currentUser.Username ?? "unknown";
+        return Ok(await _service.UnpublishAsync(id, updatedBy, ct));
+    }
+
+    [HttpGet("{id:guid}/runtime-manifest")]
+    [SessionValidation]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Roles = Permissions.Agent.View)]
+    public async Task<ActionResult<AgentRuntimeManifestDto>> GetRuntimeManifest(Guid id, CancellationToken ct)
+        => Ok(await _service.GetRuntimeManifestAsync(id, ct));
+}
+```
+
+==============================================================================
 FILE PATH: tests/Agent.UnitTests/HttpToolsConfigClientTests.cs
 ==============================================================================
 
-ACTION: Replace the entire file with the code below.
+ACTION: Replace the entire file.
 
 ```csharp
 
@@ -813,6 +1103,46 @@ public class HttpToolsConfigClientTests
         result.Status.Should().Be(ReferenceCheckStatus.NotVisible);
     }
 
+    [Fact]
+    public async Task GetAvailableTools_FallsBackToActiveForUse_AndReadsPascalCaseTools()
+    {
+        var forUse = """
+            [
+              {
+                "Id": "22222222-2222-2222-2222-222222222222",
+                "Name": "mcp-server",
+                "Status": "Active",
+                "GroupIds": ["ab9ea609-c290-4ceb-87df-f7d7077858f0"],
+                "Tools": [
+                  { "Id": "11111111-1111-1111-1111-111111111111", "Name": "search" }
+                ]
+              }
+            ]
+            """;
+
+        var handler = new StubHandler(req =>
+        {
+            var path = req.RequestUri!.AbsolutePath;
+            if (path.EndsWith("/internal/v1/remote-mcp-servers/active", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.Unauthorized);
+            if (path.EndsWith("/api/v1/remote-mcp-servers/active-for-use", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(forUse, Encoding.UTF8, "application/json"),
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var client = CreateClient(handler);
+        var (reachable, tools) = await client.GetAvailableToolsAsync();
+
+        reachable.Should().BeTrue();
+        tools.Should().ContainSingle(t => t.Id == RemoteToolId && t.ToolType == "Remote" && t.Name == "search");
+    }
+
     private sealed class StubHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
@@ -825,12 +1155,3 @@ public class HttpToolsConfigClientTests
 }
 ```
 
-==============================================================================
-VERIFY
-==============================================================================
-
-1. Set InternalServiceKey in Config_AIAgent.cnf to the real tools-service secret.
-2. Rebuild Agent.Api and restart the agent config service.
-3. In UI: select groups → open agent editor → pick a remote tool → save agent.
-
-No changes required in ServiceCollectionExtensions.cs — IConfiguration is injected into HttpToolsConfigClient automatically.
