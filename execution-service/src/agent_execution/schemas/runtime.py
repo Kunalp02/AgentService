@@ -123,8 +123,10 @@ class AgentToolRef(BaseModel):
 
 
 class KnowledgeBaseRef(BaseModel):
-    knowledge_base_id: UUID
-    knowledge_base_name: str | None = None
+    model_config = ConfigDict(populate_by_name=True)
+
+    knowledge_base_id: UUID = Field(alias="knowledgeBaseId")
+    knowledge_base_name: str | None = Field(default=None, alias="knowledgeBaseName")
     mode: KnowledgeBaseMode
 
 
@@ -140,42 +142,63 @@ class MemoryConfig(BaseModel):
 
 
 class ModelConfig(BaseModel):
-    model_id: UUID
+    model_config = ConfigDict(populate_by_name=True)
+
+    model_id: UUID = Field(alias="modelId")
     name: str | None = None
-    model_identifier: str
+    model_identifier: str = Field(alias="modelIdentifier")
     provider: str = "openai"
-    base_url: str | None = None
-    group_ids: list[UUID] = Field(default_factory=list)
-    gateway_id: UUID | None = None
-    api_key: str | None = None
+    base_url: str | None = Field(default=None, alias="baseUrl")
+    group_ids: list[UUID] = Field(default_factory=list, alias="groupIds")
+    gateway_id: UUID | None = Field(default=None, alias="gatewayId")
+    api_key: str | None = Field(default=None, alias="apiKey")
 
 
 class RemoteMcpServerConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     id: UUID
     name: str | None = None
-    remote_mcp_server_url: str | None = None
-    transport_type: str | None = None
-    auth_option: str | None = None
-    api_key: str | None = None
-    group_ids: list[UUID] = Field(default_factory=list)
+    remote_mcp_server_url: str | None = Field(default=None, alias="remoteMcpServerUrl")
+    transport_type: str | None = Field(default=None, alias="transportType")
+    auth_option: str | None = Field(default=None, alias="authOption")
+    api_key: str | None = Field(default=None, alias="apiKey")
+    group_ids: list[UUID] = Field(default_factory=list, alias="groupIds")
     tools: list[AgentToolRef] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_nested_tool_type(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        tools = data.get("tools")
+        if tools is None:
+            tools = data.get("Tools")
+        if not isinstance(tools, list):
+            return data
+        normalized: list[Any] = []
+        for tool in tools:
+            if isinstance(tool, dict) and not (tool.get("toolType") or tool.get("tool_type")):
+                tool = {**tool, "toolType": "Remote"}
+            normalized.append(tool)
+        return {**data, "tools": normalized}
 
 
 class RuntimeManifest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    agent_id: UUID
+    agent_id: UUID = Field(alias="agentId")
     name: str
     status: str
-    group_ids: list[UUID] = Field(default_factory=list)
-    system_prompt: str
+    group_ids: list[UUID] = Field(default_factory=list, alias="groupIds")
+    system_prompt: str = Field(alias="systemPrompt")
     temperature: float = 0.7
     model: ModelConfig
     tools: list[AgentToolRef] = Field(default_factory=list)
-    remote_mcp_servers: list[RemoteMcpServerConfig] = Field(default_factory=list)
-    knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list)
+    remote_mcp_servers: list[RemoteMcpServerConfig] = Field(default_factory=list, alias="remoteMcpServers")
+    knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list, alias="knowledgeBases")
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
-    manifest_hash: str = ""
+    manifest_hash: str = Field(default="", alias="manifestHash")
     revision_id: UUID | None = None
     mcp_connections: dict[str, McpConnectionConfig] = Field(default_factory=dict, alias="mcpConnections")
     local_mcp_connection: McpConnectionConfig | None = Field(default=None, alias="localMcpConnection")
@@ -198,6 +221,25 @@ class RuntimeManifest(BaseModel):
             data = {**data, "mcpConnections": mapped}
         return data
 
+    @model_validator(mode="after")
+    def _bind_remote_tool_connections(self) -> RuntimeManifest:
+        """Copy each remote server URL onto its tools so execution does not depend on a second lookup."""
+        for server in self.remote_mcp_servers:
+            url = (server.remote_mcp_server_url or "").strip()
+            if not url:
+                continue
+            bound = McpConnectionConfig(
+                mcp_server_url=url,
+                transport_type=server.transport_type or "StreamableHttp",
+                auth_option=server.auth_option or "None",
+                api_key=server.api_key,
+            )
+            for tool in server.tools:
+                tool.tool_type = ToolType.REMOTE
+                if tool.connection is None:
+                    tool.connection = bound
+        return self
+
     @property
     def is_published(self) -> bool:
         return self.status.lower() == "published"
@@ -218,26 +260,26 @@ class RuntimeManifest(BaseModel):
             shared = self.mcp_connections.get(key)
             if shared is not None:
                 return shared
-        if tool.tool_type == ToolType.REMOTE:
-            wanted = str(tool.tool_id).lower()
-            for server in self.remote_mcp_servers:
-                if not any(str(entry.tool_id).lower() == wanted for entry in server.tools):
-                    continue
-                if server.remote_mcp_server_url:
-                    return McpConnectionConfig(
-                        mcp_server_url=server.remote_mcp_server_url,
-                        transport_type=server.transport_type or "StreamableHttp",
-                        auth_option=server.auth_option or "None",
-                        api_key=server.api_key,
-                    )
+        wanted = str(tool.tool_id).lower()
+        for server in self.remote_mcp_servers:
+            if not any(str(entry.tool_id).lower() == wanted for entry in server.tools):
+                continue
+            if server.remote_mcp_server_url:
+                return McpConnectionConfig(
+                    mcp_server_url=server.remote_mcp_server_url,
+                    transport_type=server.transport_type or "StreamableHttp",
+                    auth_option=server.auth_option or "None",
+                    api_key=server.api_key,
+                )
         if tool.tool_type == ToolType.LOCAL:
             if self.local_mcp_connection is not None:
                 return self.local_mcp_connection
             fallback = (local_mcp_url_fallback or "").strip()
             if fallback:
                 return McpConnectionConfig(mcp_server_url=fallback)
+        label = tool.tool_name or str(tool.tool_id)
         raise ServiceError(
             "TOOL_ERROR",
-            f"Tool {tool.tool_id} has no MCP connection in the runtime manifest.",
+            f"Tool {label} ({tool.tool_id}, {tool.tool_type.value}) has no MCP connection in the runtime manifest.",
             400,
         )

@@ -235,13 +235,16 @@ class AgentGraphNodes:
                 raise ServiceError("TOOL_ERROR", "Tool call is missing a name.", 400)
             if not isinstance(args, dict):
                 args = {"input": args}
-            output = await self._ctx.tool_service.run(
-                manifest,
-                str(name),
-                args,
-                state.get("bearer_token"),
-                state["user_input"],
-            )
+            try:
+                output = await self._ctx.tool_service.run(
+                    manifest,
+                    str(name),
+                    args,
+                    state.get("bearer_token"),
+                    state["user_input"],
+                )
+            except ServiceError as exc:
+                output = str(exc)
             return {"id": call_id, "name": str(name), "output": output}
 
         executed = await asyncio.gather(
