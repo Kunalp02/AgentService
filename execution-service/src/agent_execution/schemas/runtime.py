@@ -208,6 +208,11 @@ class RuntimeManifest(BaseModel):
     def _normalize_mcp_connections(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
+        memory = data.get("memory", data.get("Memory"))
+        if memory is None:
+            data = {**data, "memory": {}}
+        elif "memory" not in data and isinstance(memory, dict):
+            data = {**data, "memory": memory}
         raw = data.get("mcpConnections")
         if isinstance(raw, list):
             mapped: dict[str, McpConnectionConfig] = {}

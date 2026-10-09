@@ -75,3 +75,21 @@ def test_nested_remote_server_url_is_bound_onto_the_tool():
     with pytest.raises(ServiceError) as exc:
         manifest.connection_for_tool(manifest.tools[0], local_mcp_url_fallback="")
     assert "PrimeNumberTool" in str(exc.value)
+
+
+def test_null_memory_becomes_disabled_config():
+    manifest = RuntimeManifest.model_validate(
+        {
+            "agentId": str(uuid.uuid4()),
+            "name": "Monitoring Agent",
+            "status": "Published",
+            "systemPrompt": "You are a helpful assistant.",
+            "model": {
+                "modelId": str(uuid.uuid4()),
+                "modelIdentifier": "vllm/gpt-oss-120b",
+            },
+            "memory": None,
+        }
+    )
+    assert manifest.memory.enabled is False
+    assert manifest.memory.scope is None

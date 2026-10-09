@@ -43,8 +43,10 @@ class ContextManager:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
-    def isolate_memory(self, memory: MemoryConfig) -> MemoryConfig:
+    def isolate_memory(self, memory: MemoryConfig | None) -> MemoryConfig:
         """Force Session scope so User, Agent, and Organization memory cannot cross threads."""
+        if memory is None:
+            return MemoryConfig()
         if not self._settings.context_isolate_threads:
             return memory
         if memory.scope == AgentMemoryScope.SESSION:
