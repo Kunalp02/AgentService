@@ -108,6 +108,9 @@ SCHEMA = [
     ALTER TABLE runs ADD COLUMN IF NOT EXISTS tool_calls JSONB NOT NULL DEFAULT '[]'::jsonb
     """,
     """
+    ALTER TABLE runs ADD COLUMN IF NOT EXISTS traces JSONB NOT NULL DEFAULT '[]'::jsonb
+    """,
+    """
     ALTER TABLE deployments ADD COLUMN IF NOT EXISTS api_key_enc TEXT NULL
     """,
 ]
