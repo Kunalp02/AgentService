@@ -82,17 +82,58 @@ class ToolDefinitionService:
         return None
 
     @staticmethod
+    def canonical_name(raw: str) -> str:
+        name = raw.strip().lower()
+        for prefix in ("functions.", "function.", "tools.", "tool."):
+            if name.startswith(prefix):
+                name = name[len(prefix) :]
+                break
+        return "".join(ch for ch in name if ch.isalnum())
+
+    @staticmethod
+    def tool_catalog(manifest: RuntimeManifest) -> str:
+        lines: list[str] = []
+        for tool in ToolDefinitionService.iter_tools(manifest):
+            name = ToolDefinitionService.sanitize_name(tool.tool_name or str(tool.tool_id))
+            schema = tool.resolved_input_schema()
+            parameters = schema if schema else {"type": "object", "additionalProperties": True}
+            description = tool.description or f"Invoke {name}."
+            lines.append(
+                f"- {name}: {description} parameters={parameters}"
+            )
+        for kb in manifest.knowledge_bases:
+            if kb.mode != KnowledgeBaseMode.TOOL:
+                continue
+            name = ToolDefinitionService.sanitize_name(
+                kb.knowledge_base_name or f"kb_{kb.knowledge_base_id}"
+            )
+            lines.append(f"- {name}: Search this knowledge base. parameters={{'query': string}}")
+        if not lines:
+            return ""
+        return (
+            "Available tools:\n"
+            + "\n".join(lines)
+            + "\nWhen a tool can answer the request, call it. "
+            "Do not invent tool results. If the model interface does not return a native tool call, "
+            'reply with only <tool_call>{"name":"<tool_name>","arguments":{}}</tool_call>.'
+        )
+
+    @staticmethod
     def resolve_llm_tool_name(
         manifest: RuntimeManifest, llm_name: str
     ) -> tuple[Literal["tool", "kb"], AgentToolRef | KnowledgeBaseRef] | None:
         normalized = llm_name.strip().lower()
+        canonical = ToolDefinitionService.canonical_name(llm_name)
         for tool in ToolDefinitionService.iter_tools(manifest):
             candidates = {
                 ToolDefinitionService.sanitize_name(tool.tool_name or str(tool.tool_id)).lower(),
                 (tool.tool_name or "").lower(),
                 str(tool.tool_id).lower(),
             }
-            if normalized in candidates:
+            canonical_candidates = {
+                ToolDefinitionService.canonical_name(candidate) for candidate in candidates if candidate
+            }
+            if normalized in candidates or (canonical and canonical in canonical_candidates):
                 return ("tool", tool)
         for kb in manifest.knowledge_bases:
             if kb.mode != KnowledgeBaseMode.TOOL:
@@ -103,6 +144,9 @@ class ToolDefinitionService:
                 base.lower(),
                 f"kb_{kb.knowledge_base_id}".lower(),
             }
-            if normalized in candidates:
+            canonical_candidates = {
+                ToolDefinitionService.canonical_name(candidate) for candidate in candidates if candidate
+            }
+            if normalized in candidates or (canonical and canonical in canonical_candidates):
                 return ("kb", kb)
         return None

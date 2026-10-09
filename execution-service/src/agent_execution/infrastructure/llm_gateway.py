@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -15,6 +16,20 @@ from agent_execution.infrastructure.auth.service_token_provider import (
 from agent_execution.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+_TOOL_CALL_BLOCK = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.IGNORECASE | re.DOTALL)
+_HARMONY_CALL = re.compile(
+    r"to=functions\.([A-Za-z0-9_\-.]+).*?<\|message\|>\s*(\{.*?\})\s*(?:<\|call\|>|<\|end\|>|$)",
+    re.DOTALL,
+)
+_FUNCTION_TAG = re.compile(
+    r"<function=([A-Za-z0-9_\-.]+)>(.*?)</function>",
+    re.IGNORECASE | re.DOTALL,
+)
+_PARAMETER_TAG = re.compile(
+    r"<parameter=([A-Za-z0-9_\-.]+)>\s*(.*?)\s*</parameter>",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 @dataclass(slots=True)
@@ -72,43 +87,204 @@ class BifrostLlmGateway:
         return headers
 
     @staticmethod
-    def _parse_tool_calls(message: dict[str, Any]) -> list[LlmToolCall]:
+    def _parse_arguments(args_raw: Any) -> dict[str, Any]:
+        if isinstance(args_raw, dict):
+            return args_raw
+        if args_raw is None or args_raw == "":
+            return {}
+        if isinstance(args_raw, str):
+            try:
+                parsed = json.loads(args_raw)
+            except json.JSONDecodeError:
+                return {"input": args_raw}
+            if isinstance(parsed, dict):
+                return parsed
+            return {"input": parsed}
+        return {"input": args_raw}
+
+    @staticmethod
+    def _coerce_call_items(raw: Any) -> list[Any]:
+        if raw is None:
+            return []
+        if isinstance(raw, str):
+            text = raw.strip()
+            if not text or text.lower() == "null":
+                return []
+            try:
+                raw = json.loads(text)
+            except json.JSONDecodeError:
+                return []
+        if isinstance(raw, dict):
+            return [raw]
+        if isinstance(raw, list):
+            return raw
+        return []
+
+    @staticmethod
+    def _tool_call_from_item(item: dict[str, Any], index: int) -> LlmToolCall | None:
+        function = item.get("function") if isinstance(item.get("function"), dict) else {}
+        name = (
+            function.get("name")
+            or item.get("name")
+            or item.get("tool_name")
+            or item.get("toolName")
+        )
+        if not name:
+            return None
+        if "arguments" in function:
+            args_raw = function.get("arguments")
+        elif "arguments" in item:
+            args_raw = item.get("arguments")
+        elif "args" in item:
+            args_raw = item.get("args")
+        elif "input" in item:
+            args_raw = item.get("input")
+        else:
+            args_raw = {}
+        return LlmToolCall(
+            id=str(item.get("id") or f"call_{index}_{name}"),
+            name=str(name),
+            arguments=BifrostLlmGateway._parse_arguments(args_raw),
+        )
+
+    @staticmethod
+    def _parse_structured_tool_calls(message: dict[str, Any]) -> list[LlmToolCall]:
         parsed: list[LlmToolCall] = []
-        for item in message.get("tool_calls") or []:
-            if not isinstance(item, dict):
-                continue
-            function = item.get("function") or {}
-            name = function.get("name")
-            if not name:
-                continue
-            args_raw = function.get("arguments") or "{}"
-            if isinstance(args_raw, dict):
-                args = args_raw
-            else:
-                try:
-                    args = json.loads(str(args_raw))
-                except json.JSONDecodeError:
-                    args = {"input": str(args_raw)}
-            if not isinstance(args, dict):
-                args = {"input": args}
-            parsed.append(
+        sources = [
+            message.get("tool_calls"),
+            message.get("toolCalls"),
+        ]
+        legacy = message.get("function_call")
+        if legacy:
+            sources.append([legacy])
+        for source in sources:
+            for index, item in enumerate(BifrostLlmGateway._coerce_call_items(source)):
+                if not isinstance(item, dict):
+                    continue
+                call = BifrostLlmGateway._tool_call_from_item(item, index)
+                if call is not None:
+                    parsed.append(call)
+            if parsed:
+                return parsed
+        return []
+
+    @staticmethod
+    def _split_content(content: Any) -> tuple[list[LlmToolCall], str]:
+        calls: list[LlmToolCall] = []
+        text_parts: list[str] = []
+        if isinstance(content, list):
+            for index, block in enumerate(content):
+                if isinstance(block, str):
+                    text_parts.append(block)
+                    continue
+                if not isinstance(block, dict):
+                    continue
+                block_type = str(block.get("type") or "")
+                if block_type in {"tool_use", "tool_call", "function_call"}:
+                    call = BifrostLlmGateway._tool_call_from_item(block, index)
+                    if call is not None:
+                        calls.append(call)
+                        continue
+                text = block.get("text") or block.get("content")
+                if text:
+                    text_parts.append(str(text))
+            content_text = "\n".join(text_parts)
+        elif content is None:
+            content_text = ""
+        else:
+            content_text = str(content)
+
+        if calls:
+            return calls, content_text
+
+        for index, match in enumerate(_TOOL_CALL_BLOCK.finditer(content_text)):
+            payload = match.group(1).strip()
+            try:
+                parsed = json.loads(payload)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                call = BifrostLlmGateway._tool_call_from_item(parsed, index)
+                if call is not None:
+                    calls.append(call)
+                    continue
+            if isinstance(parsed, list):
+                for nested in parsed:
+                    if isinstance(nested, dict):
+                        call = BifrostLlmGateway._tool_call_from_item(nested, index)
+                        if call is not None:
+                            calls.append(call)
+        if calls:
+            cleaned = _TOOL_CALL_BLOCK.sub("", content_text).strip()
+            return calls, cleaned
+
+        for index, match in enumerate(_HARMONY_CALL.finditer(content_text)):
+            calls.append(
                 LlmToolCall(
-                    id=str(item.get("id") or name), name=str(name), arguments=args
+                    id=f"call_harmony_{index}_{match.group(1)}",
+                    name=match.group(1),
+                    arguments=BifrostLlmGateway._parse_arguments(match.group(2)),
                 )
             )
-        return parsed
+        if calls:
+            return calls, ""
+
+        for index, match in enumerate(_FUNCTION_TAG.finditer(content_text)):
+            arguments = {
+                param.group(1): param.group(2)
+                for param in _PARAMETER_TAG.finditer(match.group(2))
+            }
+            calls.append(
+                LlmToolCall(
+                    id=f"call_fn_{index}_{match.group(1)}",
+                    name=match.group(1),
+                    arguments=arguments,
+                )
+            )
+        if calls:
+            cleaned = _FUNCTION_TAG.sub("", content_text).strip()
+            return calls, cleaned
+
+        stripped = content_text.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict) and any(
+                key in parsed for key in ("arguments", "args", "input")
+            ) and (
+                parsed.get("name") or parsed.get("tool_name") or parsed.get("toolName")
+            ):
+                call = BifrostLlmGateway._tool_call_from_item(parsed, 0)
+                if call is not None:
+                    return [call], ""
+        return [], content_text
 
     @staticmethod
     def _extract_result(data: dict[str, Any]) -> ChatCompletionResult:
+        if not isinstance(data, dict):
+            raise ServiceError("LLM_ERROR", "Gateway returned a non-JSON body.", 502)
         choices = data.get("choices") or []
+        if not choices and isinstance(data.get("data"), dict):
+            choices = data["data"].get("choices") or []
         if not choices:
             raise ServiceError("LLM_ERROR", "Gateway returned no choices.", 502)
         message = choices[0].get("message") or {}
-        content = message.get("content")
-        tool_calls = BifrostLlmGateway._parse_tool_calls(message)
-        if content is None and not tool_calls:
+        if not isinstance(message, dict):
+            message = {}
+        content_calls, content_text = BifrostLlmGateway._split_content(message.get("content"))
+        tool_calls = BifrostLlmGateway._parse_structured_tool_calls(message) or content_calls
+        if not tool_calls:
+            for key in ("reasoning", "reasoning_content", "reasoningContent"):
+                extra_calls, _extra_text = BifrostLlmGateway._split_content(message.get(key))
+                if extra_calls:
+                    tool_calls = extra_calls
+                    break
+        content = content_text
+        if not content and not tool_calls:
             raise ServiceError("LLM_ERROR", "Gateway returned empty content.", 502)
-        return ChatCompletionResult(content=str(content or ""), tool_calls=tool_calls)
+        return ChatCompletionResult(content=content, tool_calls=tool_calls)
 
     @staticmethod
     def _mock_content(model: str, messages: list[dict[str, Any]]) -> str:

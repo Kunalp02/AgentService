@@ -77,6 +77,44 @@ def test_nested_remote_server_url_is_bound_onto_the_tool():
     assert "PrimeNumberTool" in str(exc.value)
 
 
+def test_remote_tool_name_from_harmony_prefix_resolves_to_server_url():
+    remote_id = uuid.UUID("4186ee92-ad9a-4202-9bc2-0e4ee5a486be")
+    manifest = RuntimeManifest.model_validate(
+        {
+            "agentId": str(uuid.uuid4()),
+            "name": "Monitoring Agent",
+            "status": "Published",
+            "systemPrompt": "You are a helpful assistant.",
+            "model": {
+                "modelId": str(uuid.uuid4()),
+                "modelIdentifier": "vllm/gpt-oss-120b",
+            },
+            "remoteMcpServers": [
+                {
+                    "id": "9d15da89-29b9-4558-8e48-2453a494462e",
+                    "name": "Simple Remote MCP",
+                    "remoteMcpServerUrl": "http://172.19.204.25:8005/mcp",
+                    "transportType": "StreamableHttp",
+                    "authOption": "None",
+                    "tools": [
+                        {"toolId": str(remote_id), "toolName": "calculate_dog_years"}
+                    ],
+                }
+            ],
+        }
+    )
+    resolved = ToolDefinitionService.resolve_llm_tool_name(
+        manifest, "functions.calculate_dog_years"
+    )
+    assert resolved is not None
+    kind, tool = resolved
+    assert kind == "tool"
+    connection = manifest.connection_for_tool(tool, local_mcp_url_fallback="")
+    assert connection.resolved_url() == "http://172.19.204.25:8005/mcp"
+    catalog = ToolDefinitionService.tool_catalog(manifest)
+    assert "calculate_dog_years" in catalog
+
+
 def test_null_memory_becomes_disabled_config():
     manifest = RuntimeManifest.model_validate(
         {

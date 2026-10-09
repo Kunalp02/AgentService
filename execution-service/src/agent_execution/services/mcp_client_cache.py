@@ -56,11 +56,35 @@ class McpClientCache:
         raw = json.dumps(material, sort_keys=True)
         return hashlib.sha256(raw.encode()).hexdigest()
 
+    def _http_client_factory(self):
+        """Dial the manifest URL directly.
+
+        Corporate HTTP_PROXY settings otherwise intercept private MCP hosts
+        (for example 172.19.204.25) and the remote server never sees the request.
+        """
+        verify = self._verify_ssl
+        read_timeout = max(float(self._timeout), 30.0)
+
+        def factory(**kwargs: Any) -> Any:
+            try:
+                import httpx2 as http_client_module
+            except ImportError:
+                import httpx as http_client_module
+
+            kwargs["trust_env"] = False
+            kwargs["verify"] = verify
+            kwargs.setdefault("follow_redirects", True)
+            if kwargs.get("timeout") is None:
+                kwargs["timeout"] = http_client_module.Timeout(30.0, read=read_timeout)
+            return http_client_module.AsyncClient(**kwargs)
+
+        return factory
+
     def _build_transport(self, connection: McpConnectionConfig) -> StreamableHttpTransport:
         return StreamableHttpTransport(
             url=connection.resolved_url(),
             headers=connection.auth_headers(),
-            verify=self._verify_ssl,
+            httpx_client_factory=self._http_client_factory(),
         )
 
     async def call_tool(
@@ -72,6 +96,8 @@ class McpClientCache:
         key = self.connection_cache_key(connection)
         sem = self._semaphore_for(key)
         async with sem:
+            url = connection.resolved_url()
+            logger.info("MCP tools/call name=%s url=%s", tool_name, url)
             client = await self._client_for(connection, key)
             return await client.call_tool_mcp(
                 tool_name,

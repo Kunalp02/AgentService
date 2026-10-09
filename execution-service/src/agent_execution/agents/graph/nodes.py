@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from typing import Any
 
@@ -18,6 +19,8 @@ from agent_execution.services.conversation_models import (
     MemoryContext,
 )
 from agent_execution.services.tool_definition_service import ToolDefinitionService
+
+logger = logging.getLogger(__name__)
 
 _FINALIZE_PROMPT = (
     "You have reached the maximum number of tool calls allowed for this request. "
@@ -210,6 +213,11 @@ class AgentGraphNodes:
             api_key=manifest.model.api_key,
             max_tokens=state.get("context_max_output_tokens"),
         )
+        if tools and not result.tool_calls:
+            logger.info(
+                "LLM returned no tool calls for agent %s; remote MCP servers were not contacted",
+                manifest.agent_id,
+            )
         updated = messages + [_assistant_message(result.content, result.tool_calls)]
         return {
             "output": result.content,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from agent_execution.core.exceptions import ServiceError
 from agent_execution.schemas.runtime import RuntimeManifest
 from agent_execution.services.context_strategy import compact_history_block
+from agent_execution.services.tool_definition_service import ToolDefinitionService
 
 
 class PromptCompositionService:
@@ -25,6 +26,9 @@ class PromptCompositionService:
             )
         if artifact_block:
             sections.append(artifact_block)
+        catalog = ToolDefinitionService.tool_catalog(manifest)
+        if catalog:
+            sections.append(catalog)
         sections.append("Respond to the user message.")
         return "\n\n".join(sections)
 
