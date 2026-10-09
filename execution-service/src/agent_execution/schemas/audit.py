@@ -38,6 +38,8 @@ class AuditRunDetail(AuditRunItem):
     input: str = ""
     output: str | None = None
     steps: list[str] = Field(default_factory=list)
+    traces: list[dict[str, Any]] = Field(default_factory=list)
+    llm_call: dict[str, Any] | None = Field(default=None, alias="llmCall")
     retrieved_context: list[dict[str, Any]] = Field(default_factory=list, alias="retrievedContext")
     tool_calls: list[dict[str, Any]] = Field(default_factory=list, alias="toolCalls")
     manifest_hash: str = Field(default="", alias="manifestHash")

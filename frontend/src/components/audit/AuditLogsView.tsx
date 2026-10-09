@@ -368,6 +368,33 @@ export const AuditLogsView: React.FC = () => {
               </Block>
             )}
 
+            {Array.isArray(detail.traces) && detail.traces.length > 0 && (
+              <Block title="Trace">
+                {detail.llmCall?.status && (
+                  <p className="text-[11px] text-slate-300 mb-2">
+                    LLM {detail.llmCall.status}
+                    {detail.llmCall.failedStep
+                      ? ` · failed step ${detail.llmCall.failedStep}`
+                      : ""}
+                  </p>
+                )}
+                <div className="space-y-1">
+                  {detail.traces.map((trace: any, i: number) => (
+                    <div
+                      key={i}
+                      className={`text-[11px] font-mono ${
+                        trace.status === "failed" ? "text-rose-300" : "text-slate-300"
+                      }`}
+                    >
+                      {trace.status} {trace.step}
+                      {trace.detail ? ` — ${trace.detail}` : ""}
+                      {trace.error ? ` — ${trace.error}` : ""}
+                    </div>
+                  ))}
+                </div>
+              </Block>
+            )}
+
             <Block title="Steps">
               <div className="flex flex-wrap gap-1.5">
                 {detail.steps.length ? (
