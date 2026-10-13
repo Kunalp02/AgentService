@@ -1,4 +1,3 @@
-
 ﻿namespace Agent.Application.Authorization;
 
 public static class Permissions

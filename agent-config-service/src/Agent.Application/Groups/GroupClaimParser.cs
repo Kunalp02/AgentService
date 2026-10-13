@@ -1,4 +1,3 @@
-
 ﻿namespace Agent.Application.Groups;
 
 public static class GroupClaimParser

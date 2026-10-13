@@ -1,4 +1,3 @@
-
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Testcontainers.PostgreSql;
@@ -28,8 +27,8 @@ public class AgentApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
                 ["Database:AutoMigrateAndSeed"] = "true",
                 ["AuthService:BaseUrl"] = "http://localhost:5001",
                 ["ToolsConfigService:BaseUrl"] = "http://localhost:5002",
+                ["RagConfigService:BaseUrl"] = "http://localhost:5003",
                 ["ToolsConfigService:InternalServiceKey"] = "test-internal-key",
-                ["RagConfigService:BaseUrl"] = "http://localhost:5003"
             });
         });
     }

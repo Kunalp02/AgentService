@@ -1,4 +1,3 @@
-
 ﻿namespace Agent.Application.DTOs;
 
 public enum ReferenceCheckStatus

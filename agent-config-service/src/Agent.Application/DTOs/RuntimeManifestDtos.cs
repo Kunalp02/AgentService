@@ -1,4 +1,3 @@
-
 ﻿namespace Agent.Application.DTOs;
 
 public record RuntimeModelConfigDto(
@@ -17,7 +16,9 @@ public record RuntimeAgentToolRefDto
 (
         Guid ToolId,
         string? ToolName,
-        string ToolType
+        string ToolType,
+        string? Description = null,
+        string? InputSchemaJson = null
 );
 
 public record RuntimeRemoteMcpToolDto(Guid ToolId, string? ToolName);

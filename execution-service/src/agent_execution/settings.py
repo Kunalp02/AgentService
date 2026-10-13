@@ -50,6 +50,15 @@ class Settings(BaseSettings):
     mcp_client_cache_ttl_seconds: int = 300
     mcp_tool_timeout_seconds: float = 120.0
 
+    tool_execution_base_url: str = (
+        "http://172.19.204.132:8090"  # tool execution service, e.g. http://host:port
+    )
+    tool_execution_service_key: str = "dev-secret"  # sent as X-Service-Key
+    local_tool_timeout_seconds: float = 120.0
+    tool_call_timeout_seconds: float = (
+        130.0  # outer cap per tool call; keep above the inner timeout
+    )
+
     execution_database_url: str = ""
     conversation_store_database_url: str = ""
 
@@ -75,7 +84,6 @@ class Settings(BaseSettings):
     context_chars_per_token: float = 4.0
     context_tool_round_reserve_tokens: int = 1024
     context_tool_message_max_chars: int = 4000
-    context_isolate_threads: bool = True
     public_base_url: str = "http://172.19.204.37"
     api_key_encryption_secret: str = "keepitstable"
 
@@ -94,7 +102,9 @@ class Settings(BaseSettings):
         return max(256, window - max_output - tool_reserve)
 
     def context_input_budget_chars(self) -> int:
-        return int(self.context_input_token_budget() * max(1.0, self.context_chars_per_token))
+        return int(
+            self.context_input_token_budget() * max(1.0, self.context_chars_per_token)
+        )
 
     def cors_origin_list(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]

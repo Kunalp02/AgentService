@@ -1,15 +1,14 @@
+﻿using System.Text.Json;
 
-using System.Text.Json;
+namespace Agent.Application.Common;
 
-namespace Agent.Infrastructure.DownstreamClients;
-
-internal static class JsonElementExtensions
+public static class JsonElementExtensions
 {
     /// <summary>
     /// RAG wraps lists as { items }, { data: [...] }, or { data: { items: [...] } }.
     /// Tools Config usually uses a top-level items array.
     /// </summary>
-    public static JsonElement UnwrapList(this JsonElement root)
+            public static JsonElement UnwrapList(this JsonElement root)
     {
         var current = root;
         for (var depth = 0; depth < 5; depth++)
@@ -115,3 +114,4 @@ internal static class JsonElementExtensions
         return set;
     }
 }
+

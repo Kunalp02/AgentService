@@ -1,4 +1,3 @@
-
 ﻿//namespace Agent.Infrastructure.Groups;
 
 //public static class JwtGroupClaimParser

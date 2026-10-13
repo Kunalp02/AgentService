@@ -1,4 +1,3 @@
-
 using Agent.Domain.Enums;
 using ccil.ai.platform.common.Models;
 

@@ -69,8 +69,16 @@ class ApplicationContainer:
         )
         conversations = create_conversation_history_store(self.database)
         storage = StorageClient(self.settings)
+        # self.graph_context = AgentGraphContext.create(
+        #     self.settings, self.platform, conversations, storage, self.token_provider
+        # )
         self.graph_context = AgentGraphContext.create(
-            self.settings, self.platform, conversations, storage, self.token_provider
+            self.settings,
+            self.platform,
+            conversations,
+            storage,
+            self.token_provider,
+            local_tools_http=self.http_pool.local_tools,
         )
         self.threads = ThreadRepository(self.database)
         self.runs = RunRepository(self.database)

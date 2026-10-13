@@ -1,4 +1,3 @@
-
 namespace Agent.Application.DTOs;
 
 public record ModelOptionDto(
@@ -9,7 +8,6 @@ public record ToolOptionDto(Guid Id, string Name, string ToolType, IEnumerable<G
 
 public record RemoteMcpToolOptionDto(Guid Id, string Name, string? Description);
 
-/// <summary>Editor picker shape. Never includes the MCP server API key.</summary>
 public record RemoteMcpServerOptionDto(
     Guid Id,
     string Name,
@@ -19,7 +17,6 @@ public record RemoteMcpServerOptionDto(
     IEnumerable<Guid> GroupIds,
     IEnumerable<RemoteMcpToolOptionDto> Tools);
 
-/// <summary>Internal active-server payload, including the key used to call the MCP server.</summary>
 public record RemoteMcpServerDetailDto(
     Guid Id,
     string Name,
@@ -52,3 +49,5 @@ public record ModelResolveDto(
     Guid GatewayId,
     string? GatewayUrl,
     string? ApiKey);
+    
+public record LocalToolSpecDto(Guid Id, string Name, string? Description, string? ParametersSchemaJson);
