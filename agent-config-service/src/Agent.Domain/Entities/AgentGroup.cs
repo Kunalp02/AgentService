@@ -1,4 +1,3 @@
-
 namespace Agent.Domain.Entities;
 
 /// <summary>Visibility/access scoping for the Agent itself - an Agent is only listable/

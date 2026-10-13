@@ -15,19 +15,46 @@ class HttpClientPool:
         limits = httpx.Limits(max_connections=50, max_keepalive_connections=20)
         verify = settings.verify_ssl
         self.agent = httpx.AsyncClient(
-            base_url=_base(settings.agent_config_base_url), timeout=timeout, limits=limits, verify=verify
+            base_url=_base(settings.agent_config_base_url),
+            timeout=timeout,
+            limits=limits,
+            verify=verify,
         )
         self.tools = httpx.AsyncClient(
-            base_url=_base(settings.tools_config_base_url), timeout=timeout, limits=limits, verify=verify
+            base_url=_base(settings.tools_config_base_url),
+            timeout=timeout,
+            limits=limits,
+            verify=verify,
         )
         self.rag = httpx.AsyncClient(
-            base_url=_base(settings.rag_config_base_url), timeout=timeout, limits=limits, verify=verify
+            base_url=_base(settings.rag_config_base_url),
+            timeout=timeout,
+            limits=limits,
+            verify=verify,
         )
         self.auth = httpx.AsyncClient(
-            base_url=_base(settings.auth_service_base_url), timeout=timeout, limits=limits, verify=verify
+            base_url=_base(settings.auth_service_base_url),
+            timeout=timeout,
+            limits=limits,
+            verify=verify,
         )
         self.rag_ask = httpx.AsyncClient(
-            base_url=_base(settings.rag_ask_base_url), timeout=timeout, limits=limits, verify=verify
+            base_url=_base(settings.rag_ask_base_url),
+            timeout=timeout,
+            limits=limits,
+            verify=verify,
+        )
+        # self.local_tools = httpx.AsyncClient(
+        #     base_url=_base(settings.tool_execution_base_url),
+        #     timeout=timeout,
+        #     limits=limits,
+        #     verify=verify,
+        # )
+        self.local_tools = httpx.AsyncClient(
+            base_url=_base(settings.tool_execution_base_url),
+            timeout=timeout,
+            limits=limits,
+            verify=verify,
         )
 
     async def aclose(self) -> None:
@@ -36,3 +63,4 @@ class HttpClientPool:
         await self.rag.aclose()
         await self.auth.aclose()
         await self.rag_ask.aclose()
+        await self.local_tools.aclose()

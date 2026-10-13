@@ -1,4 +1,3 @@
-
 //namespace Agent.Domain.Entities;
 
 //public abstract class AuditableEntity

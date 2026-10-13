@@ -1,4 +1,3 @@
-
 using FluentValidation;
 using Agent.Application.DTOs;
 using Agent.Domain.Enums;

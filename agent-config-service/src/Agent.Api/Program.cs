@@ -1,4 +1,3 @@
-
 using Agent.Api.Extensions;
 using Agent.Infrastructure.Persistence;
 using ccil.ai.platform.common.Middleware;

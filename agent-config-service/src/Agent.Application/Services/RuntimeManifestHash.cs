@@ -1,4 +1,3 @@
-
 ﻿using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -44,12 +43,22 @@ internal static class RuntimeManifestHash
             ["status"] = status,
             ["system_prompt"] = systemPrompt,
             ["temperature"] = temperature,
+            // ["tools"] = tools
+            //     .Select(tool => (object)new SortedDictionary<string, object?>
+            //     {
+            //         ["tool_id"] = tool.ToolId,
+            //         ["tool_name"] = tool.ToolName,
+            //         ["tool_type"] = tool.ToolType,
+            //     })
+            //     .ToList(),
             ["tools"] = tools
                 .Select(tool => (object)new SortedDictionary<string, object?>
                 {
                     ["tool_id"] = tool.ToolId,
                     ["tool_name"] = tool.ToolName,
                     ["tool_type"] = tool.ToolType,
+                    ["description"] = tool.Description,
+                    ["schema"] = tool.InputSchemaJson,
                 })
                 .ToList(),
         };

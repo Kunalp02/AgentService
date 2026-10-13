@@ -1,4 +1,3 @@
-
 using Agent.Application.DTOs;
 
 namespace Agent.Application.Interfaces;

@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import uuid
 from typing import Any
-
+import time
 from agent_execution.agents.graph.context import AgentGraphContext
 from agent_execution.agents.graph.state import AgentGraphState
 from agent_execution.core.exceptions import ServiceError
@@ -18,10 +17,7 @@ from agent_execution.services.conversation_models import (
     ConversationHistory,
     MemoryContext,
 )
-from agent_execution.services.execution_trace import trace_record
 from agent_execution.services.tool_definition_service import ToolDefinitionService
-
-logger = logging.getLogger(__name__)
 
 _FINALIZE_PROMPT = (
     "You have reached the maximum number of tool calls allowed for this request. "
@@ -70,10 +66,9 @@ class AgentGraphNodes:
     async def prepare_context(self, state: AgentGraphState) -> AgentGraphState:
         agent_id = uuid.UUID(state["agent_id"])
         bearer_token = state.get("bearer_token")
-        thread_id = state.get("thread_id")
-        session_id = state.get("session_id") or thread_id or str(uuid.uuid4())
-        if self._ctx.settings.context_isolate_threads and thread_id:
-            session_id = str(thread_id)
+        session_id = (
+            state.get("session_id") or state.get("thread_id") or str(uuid.uuid4())
+        )
         mem_context = MemoryContext(session_id=session_id, org_id=state.get("org_id"))
         user_input = state["user_input"]
 
@@ -82,8 +77,7 @@ class AgentGraphNodes:
         else:
             manifest = await self._ctx.manifest_service.resolve(agent_id, bearer_token)
 
-        memory_cfg = self._ctx.context_manager.isolate_memory(manifest.memory)
-        manifest = manifest.model_copy(update={"memory": memory_cfg})
+        memory_cfg = manifest.memory
         self._ctx.memory_service.validate_context(memory_cfg, mem_context)
         history = (
             await self._ctx.memory_service.load_history(
@@ -165,17 +159,6 @@ class AgentGraphNodes:
                 *[item["trace"] for item in retrieved_context if item.get("trace")],
                 *trim_steps,
             ],
-            "traces": [
-                trace_record(
-                    "prepare_context",
-                    detail=(
-                        f"tools={'yes' if manifest.has_tools else 'no'}; "
-                        f"memory={'on' if memory_cfg.enabled else 'off'}; "
-                        f"knowledge={len(kb_blocks)}"
-                    ),
-                ),
-                *[trace_record(step) for step in trim_steps],
-            ],
         }
 
     async def _artifact_block(self, artifact_ids: list[str]) -> str | None:
@@ -225,18 +208,7 @@ class AgentGraphNodes:
             api_key=manifest.model.api_key,
             max_tokens=state.get("context_max_output_tokens"),
         )
-        if tools and not result.tool_calls:
-            logger.info(
-                "LLM returned no tool calls for agent %s; remote MCP servers were not contacted",
-                manifest.agent_id,
-            )
         updated = messages + [_assistant_message(result.content, result.tool_calls)]
-        call_name = f"call_llm:r{tool_round}"
-        tool_note = (
-            f"{len(result.tool_calls)} tool call(s)"
-            if result.tool_calls
-            else "no tool calls"
-        )
         return {
             "output": result.content,
             "messages": updated,
@@ -245,20 +217,30 @@ class AgentGraphNodes:
             "context_messages_trimmed": bool(state.get("context_messages_trimmed"))
             or fitted.trimmed,
             "context_input_tokens": fitted.estimated_input_tokens,
-            "steps": [call_name, *fitted.trim_traces],
-            "traces": [
-                trace_record(
-                    call_name,
-                    detail=f"model={manifest.model.model_identifier}; {tool_note}",
-                ),
-                *[trace_record(step) for step in fitted.trim_traces],
-            ],
+            "steps": [f"call_llm:r{tool_round}", *fitted.trim_traces],
         }
 
     async def run_tools(self, state: AgentGraphState) -> AgentGraphState:
         manifest = RuntimeManifest.model_validate(state["manifest"])
         messages = list(_messages_for_llm(state))
         tool_round = state.get("tool_round", 0) + 1
+
+        # async def execute_call(call: dict[str, Any]) -> dict[str, Any]:
+        #     name = call.get("name")
+        #     args = call.get("arguments") or {}
+        #     call_id = str(call.get("id") or f"call_{uuid.uuid4().hex[:8]}")
+        #     if not name:
+        #         raise ServiceError("TOOL_ERROR", "Tool call is missing a name.", 400)
+        #     if not isinstance(args, dict):
+        #         args = {"input": args}
+        #     output = await self._ctx.tool_service.run(
+        #         manifest,
+        #         str(name),
+        #         args,
+        #         state.get("bearer_token"),
+        #         state["user_input"],
+        #     )
+        #     return {"id": call_id, "name": str(name), "output": output}
 
         async def execute_call(call: dict[str, Any]) -> dict[str, Any]:
             name = call.get("name")
@@ -268,23 +250,39 @@ class AgentGraphNodes:
                 raise ServiceError("TOOL_ERROR", "Tool call is missing a name.", 400)
             if not isinstance(args, dict):
                 args = {"input": args}
-            error = None
+            started = time.perf_counter()
+            failed = False
             try:
-                output = await self._ctx.tool_service.run(
-                    manifest,
-                    str(name),
-                    args,
-                    state.get("bearer_token"),
-                    state["user_input"],
+                output = await asyncio.wait_for(
+                    self._ctx.tool_service.run(
+                        manifest,
+                        str(name),
+                        args,
+                        state.get("bearer_token"),
+                        state["user_input"],
+                    ),
+                    timeout=self._ctx.settings.tool_call_timeout_seconds,
                 )
             except ServiceError as exc:
-                error = str(exc)
-                output = error
+                if exc.code == exc.status_code in (401, 403):
+                    raise
+                failed = True
+                output = json.dumps(
+                    {"error": True, "message": str(exc)}, ensure_ascii=True
+                )
+            except asyncio.TimeoutError:
+                failed = True
+                output = json.dumps(
+                    {"error": True, "message": "Tool call timed out."},
+                    ensure_ascii=True,
+                )
             return {
                 "id": call_id,
                 "name": str(name),
+                "arguments": args,
                 "output": output,
-                "error": error,
+                "error": failed,
+                "durationMs": round((time.perf_counter() - started) * 1000, 1),
             }
 
         executed = await asyncio.gather(
@@ -299,12 +297,6 @@ class AgentGraphNodes:
                 {"role": "tool", "tool_call_id": item["id"], "content": output}
             )
         fitted = self._fit_for_llm(state, messages)
-        failures = [item for item in executed if item.get("error")]
-        notes = [
-            f"{item['name']}: {item['error']}" if item.get("error") else f"{item['name']}: ok"
-            for item in executed
-        ]
-        step_name = f"run_tools:r{tool_round}"
         return {
             "messages": fitted.messages,
             "tool_calls": [],
@@ -314,16 +306,7 @@ class AgentGraphNodes:
             "context_messages_trimmed": bool(state.get("context_messages_trimmed"))
             or fitted.trimmed,
             "context_input_tokens": fitted.estimated_input_tokens,
-            "steps": [step_name, *fitted.trim_traces],
-            "traces": [
-                trace_record(
-                    step_name,
-                    status="failed" if failures else "ok",
-                    detail="; ".join(notes) or "no tool calls",
-                    error=failures[0]["error"] if failures else None,
-                ),
-                *[trace_record(step) for step in fitted.trim_traces],
-            ],
+            "steps": [f"run_tools:r{tool_round}", *fitted.trim_traces],
         }
 
     async def finalize_answer(self, state: AgentGraphState) -> AgentGraphState:
@@ -351,24 +334,13 @@ class AgentGraphNodes:
             or fitted.trimmed,
             "context_input_tokens": fitted.estimated_input_tokens,
             "steps": ["finalize_answer", *fitted.trim_traces],
-            "traces": [
-                trace_record(
-                    "finalize_answer",
-                    detail=f"model={manifest.model.model_identifier}",
-                ),
-                *[trace_record(step) for step in fitted.trim_traces],
-            ],
         }
 
     async def persist_memory(self, state: AgentGraphState) -> AgentGraphState:
         manifest = RuntimeManifest.model_validate(state["manifest"])
         memory_cfg = manifest.memory
         if not self._ctx.settings.persist_conversation_memory or not memory_cfg.enabled:
-            return {
-                "memory_persisted": False,
-                "steps": ["persist_memory"],
-                "traces": [trace_record("persist_memory", detail="skipped")],
-            }
+            return {"memory_persisted": False, "steps": ["persist_memory"]}
         mem_context = MemoryContext(
             session_id=state["session_id"], org_id=state.get("org_id")
         )
@@ -384,10 +356,4 @@ class AgentGraphNodes:
             "memory_persisted": persisted,
             "history_total_turns": prior_turns + 2 if persisted else prior_turns,
             "steps": ["persist_memory"],
-            "traces": [
-                trace_record(
-                    "persist_memory",
-                    detail="saved" if persisted else "not saved",
-                )
-            ],
         }

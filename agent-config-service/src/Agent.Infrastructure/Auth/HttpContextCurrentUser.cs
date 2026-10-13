@@ -1,4 +1,3 @@
-
 using Microsoft.AspNetCore.Http;
 using Agent.Application.Interfaces;
 using ccil.ai.platform.common.Auth;

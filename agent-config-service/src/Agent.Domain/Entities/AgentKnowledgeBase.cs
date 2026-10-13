@@ -1,4 +1,3 @@
-
 using Agent.Domain.Enums;
 
 namespace Agent.Domain.Entities;

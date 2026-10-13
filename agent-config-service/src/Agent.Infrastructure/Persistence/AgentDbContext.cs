@@ -1,4 +1,3 @@
-
 using Microsoft.EntityFrameworkCore;
 using Agent.Application.Interfaces;
 using Agent.Domain.Entities;

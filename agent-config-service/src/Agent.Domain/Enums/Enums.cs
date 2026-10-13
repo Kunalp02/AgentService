@@ -1,4 +1,3 @@
-
 namespace Agent.Domain.Enums;
 
 public enum AgentStatus { Draft, Published }

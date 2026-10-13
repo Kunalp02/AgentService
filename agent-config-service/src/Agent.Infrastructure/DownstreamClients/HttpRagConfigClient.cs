@@ -1,4 +1,3 @@
-
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
@@ -6,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Agent.Application.DTOs;
 using Agent.Application.Interfaces;
 using ccil.ai.platform.common.Auth;
+using Agent.Application.Common;
 
 namespace Agent.Infrastructure.DownstreamClients;
 
