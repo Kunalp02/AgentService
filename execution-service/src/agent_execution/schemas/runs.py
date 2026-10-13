@@ -68,6 +68,8 @@ class RunResponse(BaseModel):
         default_factory=list, alias="outputArtifactIds"
     )
     steps: list[str] = Field(default_factory=list)
+    traces: list[ExecutionTrace] = Field(default_factory=list)
+    llm_call: LlmCallTrace | None = Field(default=None, alias="llmCall")
     stop_reason: str | None = Field(default=None, alias="stopReason")
     created_at: datetime = Field(alias="createdAt")
     started_at: datetime | None = Field(default=None, alias="startedAt")
@@ -77,6 +79,26 @@ class RunResponse(BaseModel):
 class ExecutionStep(BaseModel):
     name: str
     detail: str | None = None
+
+
+class ExecutionTrace(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    step: str
+    status: str = "ok"
+    detail: str | None = None
+    error: str | None = None
+
+
+class LlmCallTrace(BaseModel):
+    """Where the model call sits relative to a failed step."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: str
+    model: str | None = None
+    calls: int = 0
+    failed_step: str | None = Field(default=None, alias="failedStep")
 
 
 class MemorySnapshot(BaseModel):
@@ -100,6 +122,8 @@ class RunResult(BaseModel):
         default_factory=list, alias="outputArtifactIds"
     )
     steps: list[ExecutionStep] = Field(default_factory=list)
+    traces: list[ExecutionTrace] = Field(default_factory=list)
+    llm_call: LlmCallTrace | None = Field(default=None, alias="llmCall")
     memory: MemorySnapshot = Field(default_factory=MemorySnapshot)
     retrieved_context: list[dict[str, Any]] = Field(
         default_factory=list, alias="retrievedContext"

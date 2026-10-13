@@ -18,6 +18,7 @@ from agent_execution.services.conversation_models import (
     ConversationHistory,
     MemoryContext,
 )
+from agent_execution.services.execution_trace import trace_record
 from agent_execution.services.tool_definition_service import ToolDefinitionService
 
 logger = logging.getLogger(__name__)
@@ -164,6 +165,17 @@ class AgentGraphNodes:
                 *[item["trace"] for item in retrieved_context if item.get("trace")],
                 *trim_steps,
             ],
+            "traces": [
+                trace_record(
+                    "prepare_context",
+                    detail=(
+                        f"tools={'yes' if manifest.has_tools else 'no'}; "
+                        f"memory={'on' if memory_cfg.enabled else 'off'}; "
+                        f"knowledge={len(kb_blocks)}"
+                    ),
+                ),
+                *[trace_record(step) for step in trim_steps],
+            ],
         }
 
     async def _artifact_block(self, artifact_ids: list[str]) -> str | None:
@@ -219,6 +231,12 @@ class AgentGraphNodes:
                 manifest.agent_id,
             )
         updated = messages + [_assistant_message(result.content, result.tool_calls)]
+        call_name = f"call_llm:r{tool_round}"
+        tool_note = (
+            f"{len(result.tool_calls)} tool call(s)"
+            if result.tool_calls
+            else "no tool calls"
+        )
         return {
             "output": result.content,
             "messages": updated,
@@ -227,7 +245,14 @@ class AgentGraphNodes:
             "context_messages_trimmed": bool(state.get("context_messages_trimmed"))
             or fitted.trimmed,
             "context_input_tokens": fitted.estimated_input_tokens,
-            "steps": [f"call_llm:r{tool_round}", *fitted.trim_traces],
+            "steps": [call_name, *fitted.trim_traces],
+            "traces": [
+                trace_record(
+                    call_name,
+                    detail=f"model={manifest.model.model_identifier}; {tool_note}",
+                ),
+                *[trace_record(step) for step in fitted.trim_traces],
+            ],
         }
 
     async def run_tools(self, state: AgentGraphState) -> AgentGraphState:
@@ -243,6 +268,7 @@ class AgentGraphNodes:
                 raise ServiceError("TOOL_ERROR", "Tool call is missing a name.", 400)
             if not isinstance(args, dict):
                 args = {"input": args}
+            error = None
             try:
                 output = await self._ctx.tool_service.run(
                     manifest,
@@ -252,8 +278,14 @@ class AgentGraphNodes:
                     state["user_input"],
                 )
             except ServiceError as exc:
-                output = str(exc)
-            return {"id": call_id, "name": str(name), "output": output}
+                error = str(exc)
+                output = error
+            return {
+                "id": call_id,
+                "name": str(name),
+                "output": output,
+                "error": error,
+            }
 
         executed = await asyncio.gather(
             *(execute_call(call) for call in state.get("tool_calls") or [])
@@ -267,6 +299,12 @@ class AgentGraphNodes:
                 {"role": "tool", "tool_call_id": item["id"], "content": output}
             )
         fitted = self._fit_for_llm(state, messages)
+        failures = [item for item in executed if item.get("error")]
+        notes = [
+            f"{item['name']}: {item['error']}" if item.get("error") else f"{item['name']}: ok"
+            for item in executed
+        ]
+        step_name = f"run_tools:r{tool_round}"
         return {
             "messages": fitted.messages,
             "tool_calls": [],
@@ -276,7 +314,16 @@ class AgentGraphNodes:
             "context_messages_trimmed": bool(state.get("context_messages_trimmed"))
             or fitted.trimmed,
             "context_input_tokens": fitted.estimated_input_tokens,
-            "steps": [f"run_tools:r{tool_round}", *fitted.trim_traces],
+            "steps": [step_name, *fitted.trim_traces],
+            "traces": [
+                trace_record(
+                    step_name,
+                    status="failed" if failures else "ok",
+                    detail="; ".join(notes) or "no tool calls",
+                    error=failures[0]["error"] if failures else None,
+                ),
+                *[trace_record(step) for step in fitted.trim_traces],
+            ],
         }
 
     async def finalize_answer(self, state: AgentGraphState) -> AgentGraphState:
@@ -304,13 +351,24 @@ class AgentGraphNodes:
             or fitted.trimmed,
             "context_input_tokens": fitted.estimated_input_tokens,
             "steps": ["finalize_answer", *fitted.trim_traces],
+            "traces": [
+                trace_record(
+                    "finalize_answer",
+                    detail=f"model={manifest.model.model_identifier}",
+                ),
+                *[trace_record(step) for step in fitted.trim_traces],
+            ],
         }
 
     async def persist_memory(self, state: AgentGraphState) -> AgentGraphState:
         manifest = RuntimeManifest.model_validate(state["manifest"])
         memory_cfg = manifest.memory
         if not self._ctx.settings.persist_conversation_memory or not memory_cfg.enabled:
-            return {"memory_persisted": False, "steps": ["persist_memory"]}
+            return {
+                "memory_persisted": False,
+                "steps": ["persist_memory"],
+                "traces": [trace_record("persist_memory", detail="skipped")],
+            }
         mem_context = MemoryContext(
             session_id=state["session_id"], org_id=state.get("org_id")
         )
@@ -326,4 +384,10 @@ class AgentGraphNodes:
             "memory_persisted": persisted,
             "history_total_turns": prior_turns + 2 if persisted else prior_turns,
             "steps": ["persist_memory"],
+            "traces": [
+                trace_record(
+                    "persist_memory",
+                    detail="saved" if persisted else "not saved",
+                )
+            ],
         }

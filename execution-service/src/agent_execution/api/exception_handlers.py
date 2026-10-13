@@ -12,7 +12,15 @@ from agent_execution.logging_config import current_request_id
 logger = logging.getLogger(__name__)
 
 
-def error_body(code: str, message: str, *, request: Request | None = None, details: list | None = None) -> dict:
+def error_body(
+    code: str,
+    message: str,
+    *,
+    request: Request | None = None,
+    details: list | None = None,
+    traces: list | None = None,
+    llm_call: dict | None = None,
+) -> dict:
     request_id = current_request_id()
     if request is not None:
         state = request.scope.get("state")
@@ -23,6 +31,10 @@ def error_body(code: str, message: str, *, request: Request | None = None, detai
     body: dict = {"code": code, "message": message, "requestId": request_id}
     if details is not None:
         body["details"] = details
+    if traces:
+        body["traces"] = traces
+    if llm_call:
+        body["llmCall"] = llm_call
     return body
 
 
@@ -37,7 +49,16 @@ class ApiErrorHandler:
             logger.error("service.error code=%s status=%s", exc.code, exc.status_code)
         else:
             logger.info("service.rejected code=%s status=%s", exc.code, exc.status_code)
-        return JSONResponse(status_code=exc.status_code, content=error_body(exc.code, str(exc), request=request))
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=error_body(
+                exc.code,
+                str(exc),
+                request=request,
+                traces=getattr(exc, "traces", None),
+                llm_call=getattr(exc, "llm_call", None),
+            ),
+        )
 
     async def validation_error(self, request: Request, exc: RequestValidationError) -> JSONResponse:
         details = [{"loc": list(item.get("loc", ())), "message": item.get("msg"), "type": item.get("type")} for item in exc.errors()]

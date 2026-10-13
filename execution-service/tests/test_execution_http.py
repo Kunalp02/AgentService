@@ -25,6 +25,19 @@ def _app() -> FastAPI:
     async def reject() -> None:
         raise ServiceError("BUSY", "Too many runs are in progress.", 429)
 
+    @app.get("/failed-step")
+    async def failed_step() -> None:
+        raise ServiceError(
+            "LLM_ERROR",
+            "Gateway chat failed.",
+            502,
+            traces=[
+                {"step": "prepare_context", "status": "ok", "detail": None, "error": None},
+                {"step": "call_llm", "status": "failed", "detail": None, "error": "LLM_ERROR: Gateway chat failed."},
+            ],
+            llm_call={"status": "failed", "model": "vllm/gpt-oss-120b", "calls": 0, "failedStep": "call_llm"},
+        )
+
     @app.get("/boom")
     async def boom() -> None:
         raise RuntimeError("secret database password")
@@ -46,6 +59,17 @@ def test_service_error_includes_request_id():
     body = response.json()
     assert body["code"] == "BUSY"
     assert body["requestId"] == "req-429"
+
+
+def test_failed_step_error_includes_traces_and_llm_call():
+    response = TestClient(_app()).get("/failed-step", headers={"X-Request-ID": "req-trace"})
+    assert response.status_code == 502
+    body = response.json()
+    assert body["code"] == "LLM_ERROR"
+    assert body["llmCall"]["status"] == "failed"
+    assert body["traces"][1]["step"] == "call_llm"
+    assert body["traces"][1]["status"] == "failed"
+    assert "Gateway chat failed" in body["traces"][1]["error"]
 
 
 def test_unhandled_error_hides_exception_text():

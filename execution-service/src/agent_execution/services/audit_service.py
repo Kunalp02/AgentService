@@ -4,6 +4,7 @@ from datetime import datetime
 from uuid import UUID
 
 from agent_execution.core.exceptions import ServiceError
+from agent_execution.services.execution_trace import summarize_llm_call
 from agent_execution.infrastructure.persistence.run_repository import RunRepository
 from agent_execution.schemas.audit import AuditRunDetail, AuditRunItem, AuditRunPage
 from agent_execution.services.thread_service import ThreadService
@@ -62,6 +63,10 @@ class AuditService:
             raise ServiceError("NOT_FOUND", "Run not found.", 404)
         data = dict(row)
         data["steps"] = [str(s) for s in _json(data["steps"], [])]
+        data["traces"] = _json(data.get("traces"), [])
+        data["llm_call"] = summarize_llm_call(
+            data["traces"], stop_reason=data.get("stop_reason")
+        )
         data["retrieved_context"] = _json(data["retrieved_context"], [])
         data["tool_calls"] = _json(data["tool_calls"], [])
         return AuditRunDetail(**data)

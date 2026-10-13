@@ -19,6 +19,11 @@ class AgentGraphState(TypedDict, total=False):
     llm_input: str
     output: str
     stop_reason: str | None
+    error: str | None
+    failed_step: str | None
+    failure_code: str | None
+    failure_status: int | None
+    traces: Annotated[list[dict[str, Any]], operator.add]
     messages: list[dict[str, Any]]
     history_turns: list[dict[str, str]]
     memory_scope: str | None

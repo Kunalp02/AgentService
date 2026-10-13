@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
-from agent_execution.agents.graph.builder import build_execution_graph
+from agent_execution.agents.graph.builder import build_execution_graph, guard_step
 from agent_execution.agents.graph.context import AgentGraphContext
 from agent_execution.agents.graph.nodes import AgentGraphNodes
 from agent_execution.agents.graph.state import AgentGraphState
@@ -18,11 +18,18 @@ from agent_execution.infrastructure.persistence.run_repository import RunReposit
 from agent_execution.schemas.runs import (
     CreateRunRequest,
     Dispatch,
+    ExecutionTrace,
+    LlmCallTrace,
     MemorySnapshot,
     RunResponse,
     RunResult,
     RunStatus,
     ExecutionStep,
+)
+from agent_execution.services.execution_trace import (
+    describe_exception,
+    summarize_llm_call,
+    trace_record,
 )
 from agent_execution.schemas.runtime import RuntimeManifest
 from agent_execution.schemas.threads import ExecutionType
@@ -126,6 +133,7 @@ class AgentExecutionService:
         run_id = row["run_id"]
         self._log_started(row, request, Dispatch.SYNC.value)
         beat = asyncio.create_task(self._heartbeat(run_id, self._api_worker))
+        final_state = None
         try:
             async with self._slots.acquire():
                 state = self._initial_state(
@@ -134,38 +142,74 @@ class AgentExecutionService:
                 if manifest.has_tools:
                     final_state = await self._graph.ainvoke(state)
                 else:
-                    prepared = await self._nodes.prepare_context(state)
-                    parts: list[str] = []
-                    async for token in self._context.llm_gateway.stream(
-                        model=manifest.model.model_identifier,
-                        system_prompt=prepared["system_prompt"],
-                        user_input=request.input,
-                        temperature=manifest.temperature,
-                        bearer_token=bearer_token,
-                        base_url=manifest.model.base_url,
-                        api_key=manifest.model.api_key,
-                    ):
-                        parts.append(token)
-                        yield self._sse("token", {"text": token})
-                    streamed = {**prepared, "output": "".join(parts)}
-                    persisted = await self._nodes.persist_memory(streamed)
-                    final_state = {
-                        **streamed,
-                        **persisted,
-                        "steps": [
-                            "prepare_context",
-                            "call_llm_stream",
-                            "persist_memory",
-                        ],
-                    }
+                    prepared = await guard_step(
+                        "prepare_context", self._nodes.prepare_context
+                    )(state)
+                    final_state = _merge_state(state, prepared)
+                    if prepared.get("stop_reason") != "failed":
+                        parts: list[str] = []
+                        try:
+                            async for token in self._context.llm_gateway.stream(
+                                model=manifest.model.model_identifier,
+                                system_prompt=prepared["system_prompt"],
+                                user_input=request.input,
+                                temperature=manifest.temperature,
+                                bearer_token=bearer_token,
+                                base_url=manifest.model.base_url,
+                                api_key=manifest.model.api_key,
+                            ):
+                                parts.append(token)
+                                yield self._sse("token", {"text": token})
+                        except Exception as exc:
+                            detail = describe_exception(exc)
+                            final_state = _merge_state(
+                                final_state,
+                                {
+                                    "stop_reason": "failed",
+                                    "error": detail,
+                                    "failed_step": "call_llm",
+                                    "failure_code": getattr(exc, "code", "LLM_ERROR"),
+                                    "failure_status": getattr(exc, "status_code", 502),
+                                    "steps": ["call_llm:failed"],
+                                    "traces": [
+                                        trace_record("call_llm", status="failed", error=detail)
+                                    ],
+                                },
+                            )
+                        else:
+                            final_state = _merge_state(
+                                final_state,
+                                {
+                                    "output": "".join(parts),
+                                    "steps": ["call_llm_stream"],
+                                    "traces": [
+                                        trace_record(
+                                            "call_llm_stream",
+                                            detail=f"model={manifest.model.model_identifier}",
+                                        )
+                                    ],
+                                },
+                            )
+                            persisted = await guard_step(
+                                "persist_memory", self._nodes.persist_memory
+                            )(final_state)
+                            final_state = _merge_state(final_state, persisted)
+            self._raise_if_step_failed(final_state, manifest)
             result = await self._finish_success(thread, run_id, manifest, final_state)
             yield self._sse("done", result.model_dump(mode="json"))
         except Exception as exc:
-            await self._finish_failure(row, exc)
-            yield self._sse(
-                "error",
-                {"code": getattr(exc, "code", "RUN_FAILED"), "message": str(exc)},
-            )
+            await self._finish_failure(row, exc, state=final_state)
+            payload = {
+                "code": getattr(exc, "code", "RUN_FAILED"),
+                "message": str(exc),
+            }
+            traces = getattr(exc, "traces", None)
+            llm_call = getattr(exc, "llm_call", None)
+            if traces:
+                payload["traces"] = traces
+            if llm_call:
+                payload["llmCall"] = llm_call
+            yield self._sse("error", payload)
         finally:
             beat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -182,6 +226,7 @@ class AgentExecutionService:
         thread = await self._threads.get_open(row["agent_id"], row["thread_id"])
         manifest = await self._threads.manifest_for_run(thread, None)
         beat = asyncio.create_task(self._heartbeat(row["run_id"], worker_id))
+        final_state = None
         request = CreateRunRequest(
             input=row["input"],
             input_artifact_ids=_uuid_list(row["input_artifact_ids"]),
@@ -192,10 +237,12 @@ class AgentExecutionService:
                 final_state = await self._graph.ainvoke(
                     self._initial_state(thread, request, None, manifest, row["run_id"])
                 )
+            self._raise_if_step_failed(final_state, manifest)
             await self._finish_success(thread, row["run_id"], manifest, final_state)
         except Exception as exc:
-            logger.exception("Background run %s failed", row["run_id"])
-            await self._finish_failure(row, exc)
+            if not isinstance(exc, ServiceError):
+                logger.exception("Background run %s failed", row["run_id"])
+            await self._finish_failure(row, exc, state=final_state)
         finally:
             beat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -247,6 +294,7 @@ class AgentExecutionService:
             )
         self._log_started(row, request, Dispatch.SYNC.value)
         beat = asyncio.create_task(self._heartbeat(row["run_id"], self._api_worker))
+        final_state = None
         try:
             async with self._slots.acquire():
                 final_state = await self._graph.ainvoke(
@@ -254,11 +302,12 @@ class AgentExecutionService:
                         thread, request, bearer_token, manifest, row["run_id"]
                     )
                 )
+            self._raise_if_step_failed(final_state, manifest)
             return await self._finish_success(
                 thread, row["run_id"], manifest, final_state
             )
         except Exception as exc:
-            await self._finish_failure(row, exc)
+            await self._finish_failure(row, exc, state=final_state)
             raise
         finally:
             beat.cancel()
@@ -347,24 +396,65 @@ class AgentExecutionService:
             manifest_hash=manifest.manifest_hash,
             revision_id=manifest.revision_id,
             tool_calls=list(state.get("tool_results") or []),
+            traces=list(state.get("traces") or []),
         )
         return self._to_result(thread, run_id, manifest, state, output_ids)
 
-    async def _finish_failure(self, row, exc: Exception) -> None:
+    def _raise_if_step_failed(self, state, manifest: RuntimeManifest) -> None:
+        if not state or state.get("stop_reason") != "failed":
+            return
+        traces = list(state.get("traces") or [])
+        llm_call = self._llm_call(state, manifest)
+        code = state.get("failure_code") or "RUN_FAILED"
+        status = int(state.get("failure_status") or 500)
+        if status < 400 or status > 599:
+            status = 500
+        raise ServiceError(
+            code,
+            state.get("error") or "Execution step failed.",
+            status,
+            traces=traces,
+            llm_call=llm_call,
+        )
+
+    async def _finish_failure(self, row, exc: Exception, *, state=None) -> None:
         attempt = int(row["attempt"] or 0)
         requeue = (
             row["dispatch"] == Dispatch.ASYNC.value
             and status_after_failure(attempt, int(row["max_attempts"]))
             == RunStatus.QUEUED
         )
+        traces = list(getattr(exc, "traces", None) or [])
+        if not traces and state:
+            traces = list(state.get("traces") or [])
+        llm_call = getattr(exc, "llm_call", None)
+        steps = list(state.get("steps") or []) if state else []
+        stop_reason = (state or {}).get("stop_reason") or "failed"
+        if not getattr(exc, "traces", None):
+            exc.traces = traces  # type: ignore[attr-defined]
+        if llm_call is None and state is not None:
+            llm_call = summarize_llm_call(
+                traces,
+                failed_step=(state or {}).get("failed_step"),
+                stop_reason=stop_reason,
+            )
+            exc.llm_call = llm_call  # type: ignore[attr-defined]
         logger.warning(
-            "run.failed runId=%s attempt=%s requeue=%s error=%s",
+            "run.failed runId=%s attempt=%s requeue=%s step=%s error=%s",
             row["run_id"],
             attempt,
             requeue,
+            (state or {}).get("failed_step"),
             type(exc).__name__,
         )
-        await self._runs.mark_failed(row["run_id"], str(exc), requeue=requeue)
+        await self._runs.mark_failed(
+            row["run_id"],
+            str(exc),
+            requeue=requeue,
+            steps=steps,
+            traces=traces,
+            stop_reason=stop_reason,
+        )
 
     @staticmethod
     def _log_started(row, request: CreateRunRequest, dispatch: str) -> None:
@@ -403,11 +493,25 @@ class AgentExecutionService:
             "bearer_token": bearer_token,
             "manifest": manifest.model_dump(mode="json"),
             "steps": [],
+            "traces": [],
         }
+
+    def _llm_call(self, state, manifest: RuntimeManifest | None) -> dict:
+        model = None
+        if manifest is not None:
+            model = manifest.model.model_identifier
+        return summarize_llm_call(
+            state.get("traces") or [],
+            model=model,
+            failed_step=state.get("failed_step"),
+            stop_reason=state.get("stop_reason"),
+        )
 
     def _to_result(
         self, thread, run_id, manifest: RuntimeManifest, state, output_ids: list[UUID]
     ) -> RunResult:
+        traces = _trace_models(state.get("traces"))
+        llm_call = LlmCallTrace.model_validate(self._llm_call(state, manifest))
         return RunResult(
             agent_id=thread["agent_id"],
             thread_id=thread["thread_id"],
@@ -416,7 +520,9 @@ class AgentExecutionService:
             session_id=str(thread["thread_id"]),
             output=state.get("output") or "",
             output_artifact_ids=output_ids,
-            steps=[ExecutionStep(name=name) for name in (state.get("steps") or [])],
+            steps=[ExecutionStep(name=str(name)) for name in (state.get("steps") or [])],
+            traces=traces,
+            llm_call=llm_call,
             memory=MemorySnapshot(
                 scope=state.get("memory_scope"),
                 total_turns=state.get("history_total_turns", 0),
@@ -437,19 +543,23 @@ class AgentExecutionService:
                 "toolRounds": state.get("tool_round", 0),
                 "stopReason": state.get("stop_reason") or "completed",
                 "executionType": thread["execution_type"],
+                "traces": [item.model_dump(mode="json") for item in traces],
+                "llmCall": llm_call.model_dump(mode="json", by_alias=True),
             },
         )
 
     def _result_from_row(self, row, manifest: RuntimeManifest) -> RunResult:
         output_ids = _uuid_list(row["output_artifact_ids"])
-        steps = (
-            row["steps"]
-            if isinstance(row["steps"], list)
-            else json.loads(row["steps"] or "[]")
-        )
+        steps = _json_list(row["steps"])
+        traces = _trace_models(_json_list(row["traces"]) if "traces" in row.keys() else [])
         retrieved = row["retrieved_context"]
         if isinstance(retrieved, str):
             retrieved = json.loads(retrieved)
+        llm_raw = summarize_llm_call(
+            [item.model_dump() for item in traces],
+            model=manifest.model.model_identifier,
+            stop_reason=row["stop_reason"],
+        )
         return RunResult(
             agent_id=row["agent_id"],
             thread_id=row["thread_id"],
@@ -458,9 +568,15 @@ class AgentExecutionService:
             session_id=str(row["thread_id"]),
             output=row["output"] or "",
             output_artifact_ids=output_ids,
-            steps=[ExecutionStep(name=name) for name in steps],
+            steps=[ExecutionStep(name=str(name)) for name in steps],
+            traces=traces,
+            llm_call=LlmCallTrace.model_validate(llm_raw),
             retrieved_context=retrieved or [],
-            metadata={"manifestHash": row["manifest_hash"], "runtime": "langgraph"},
+            metadata={
+                "manifestHash": row["manifest_hash"],
+                "runtime": "langgraph",
+                "llmCall": llm_raw,
+            },
         )
 
     @staticmethod
@@ -480,6 +596,14 @@ class AgentExecutionService:
             input_artifact_ids=_uuid_list(row["input_artifact_ids"]),
             output_artifact_ids=_uuid_list(row["output_artifact_ids"]),
             steps=_str_list(row["steps"]),
+            traces=_trace_models(_json_list(row["traces"]) if "traces" in row.keys() else []),
+            llm_call=LlmCallTrace.model_validate(
+                summarize_llm_call(
+                    _json_list(row["traces"]) if "traces" in row.keys() else [],
+                    failed_step=None,
+                    stop_reason=row["stop_reason"],
+                )
+            ),
             stop_reason=row["stop_reason"],
             created_at=row["created_at"],
             started_at=row["started_at"],
@@ -503,6 +627,37 @@ def _uuid_list(value) -> list[UUID]:
         except ValueError:
             continue
     return ids
+
+
+def _merge_state(base: dict, update: dict) -> dict:
+    merged = {
+        **base,
+        **{key: value for key, value in update.items() if key not in {"steps", "traces"}},
+    }
+    if "steps" in update:
+        merged["steps"] = list(base.get("steps") or []) + list(update.get("steps") or [])
+    if "traces" in update:
+        merged["traces"] = list(base.get("traces") or []) + list(update.get("traces") or [])
+    return merged
+
+
+def _json_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = json.loads(value)
+    return list(value or [])
+
+
+def _trace_models(value) -> list[ExecutionTrace]:
+    traces: list[ExecutionTrace] = []
+    for item in value or []:
+        if isinstance(item, ExecutionTrace):
+            traces.append(item)
+            continue
+        if isinstance(item, dict) and item.get("step"):
+            traces.append(ExecutionTrace.model_validate(item))
+    return traces
 
 
 def _str_list(value) -> list[str]:

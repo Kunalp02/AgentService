@@ -87,7 +87,7 @@ class RunRepository:
         async with pool.acquire() as conn:
             return await conn.fetchrow(
                 f"""SELECT {self._AUDIT_COLS}, r.input AS input_preview, r.input, r.output,
-                           r.steps, r.retrieved_context, r.tool_calls, r.manifest_hash,
+                           r.steps, r.traces, r.retrieved_context, r.tool_calls, r.manifest_hash,
                            r.revision_id
                     {self._AUDIT_FROM} WHERE r.run_id = $1""",
                 run_id,
@@ -241,6 +241,7 @@ class RunRepository:
         manifest_hash,
         revision_id,
         tool_calls: list | None = None,
+        traces: list | None = None,
     ) -> None:
         pool = await self._database.pool()
         async with pool.acquire() as conn:
@@ -250,7 +251,8 @@ class RunRepository:
                 SET status = 'SUCCEEDED', output = $2, output_artifact_ids = $3::jsonb,
                     steps = $4::jsonb, retrieved_context = $5::jsonb, stop_reason = $6,
                     manifest_hash = $7, revision_id = COALESCE($8, revision_id),
-                    completed_at = $9, lease_expires_at = NULL, tool_calls = $10::jsonb
+                    completed_at = $9, lease_expires_at = NULL, tool_calls = $10::jsonb,
+                    traces = $11::jsonb
                 WHERE run_id = $1
                 """,
                 run_id,
@@ -263,9 +265,19 @@ class RunRepository:
                 revision_id,
                 datetime.now(timezone.utc),
                 json.dumps(tool_calls or []),
+                json.dumps(traces or []),
             )
 
-    async def mark_failed(self, run_id: UUID, error: str, *, requeue: bool) -> None:
+    async def mark_failed(
+        self,
+        run_id: UUID,
+        error: str,
+        *,
+        requeue: bool,
+        steps: list | None = None,
+        traces: list | None = None,
+        stop_reason: str | None = None,
+    ) -> None:
         pool = await self._database.pool()
         async with pool.acquire() as conn:
             if requeue:
@@ -274,12 +286,18 @@ class RunRepository:
                     UPDATE runs
                     SET status = 'QUEUED',
                         error = $2,
+                        steps = $3::jsonb,
+                        traces = $4::jsonb,
+                        stop_reason = $5,
                         worker_id = NULL,
                         lease_expires_at = NULL
                     WHERE run_id = $1
                     """,
                     run_id,
                     error[:2000],
+                    json.dumps(steps or []),
+                    json.dumps(traces or []),
+                    stop_reason,
                 )
                 return
             await conn.execute(
@@ -287,12 +305,18 @@ class RunRepository:
                 UPDATE runs
                 SET status = 'FAILED',
                     error = $2,
-                    completed_at = $3,
+                    steps = $3::jsonb,
+                    traces = $4::jsonb,
+                    stop_reason = $5,
+                    completed_at = $6,
                     lease_expires_at = NULL
                 WHERE run_id = $1
                 """,
                 run_id,
                 error[:2000],
+                json.dumps(steps or []),
+                json.dumps(traces or []),
+                stop_reason,
                 datetime.now(timezone.utc),
             )
 
