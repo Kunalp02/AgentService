@@ -29,6 +29,7 @@ class CreateRunRequest(BaseModel):
         default_factory=list, alias="inputArtifactIds"
     )
     org_id: str | None = Field(default=None, alias="orgId")
+    session_id: str | None = Field(default=None, alias="sessionId")
     stream: bool = False
     background: bool = False
     idempotency_key: str | None = Field(default=None, alias="idempotencyKey")

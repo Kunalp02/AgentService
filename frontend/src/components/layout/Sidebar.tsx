@@ -13,7 +13,8 @@ import {
   Cpu,
   FolderGit2,
   Lock,
-  Boxes
+  Boxes,
+  GitBranch
 } from 'lucide-react';
 import { usePlatform } from '../../context/PlatformContext';
 import { RolePermissionKey } from '../../types';
@@ -111,6 +112,12 @@ export const Sidebar: React.FC = () => {
           permission: PERMISSIONS.Agent.View,
           badge: agents.length,
           badgeColor: 'bg-purple-500/20 text-purple-300',
+        },
+        {
+          id: 'workflows',
+          label: 'Workflows',
+          icon: GitBranch,
+          permission: PERMISSIONS.Agent.View,
         },
         {
           id: 'playground',

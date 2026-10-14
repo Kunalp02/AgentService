@@ -110,6 +110,37 @@ SCHEMA = [
     """
     ALTER TABLE deployments ADD COLUMN IF NOT EXISTS api_key_enc TEXT NULL
     """,
+    """
+    CREATE TABLE IF NOT EXISTS workflows (
+        workflow_id UUID PRIMARY KEY,
+        name TEXT NOT NULL,
+        status VARCHAR(32) NOT NULL,
+        definition JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS workflow_runs (
+        workflow_run_id UUID PRIMARY KEY,
+        workflow_id UUID NOT NULL,
+        status VARCHAR(32) NOT NULL,
+        input TEXT NOT NULL,
+        output TEXT NULL,
+        error TEXT NULL,
+        session_id TEXT NOT NULL DEFAULT '',
+        user_id TEXT NOT NULL DEFAULT '',
+        org_id TEXT NULL,
+        steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+        state JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMPTZ NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_workflow_runs_workflow
+        ON workflow_runs (workflow_id, created_at DESC)
+    """,
 ]
 
 

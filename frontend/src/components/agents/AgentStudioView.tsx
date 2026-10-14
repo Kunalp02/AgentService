@@ -1,5 +1,5 @@
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Bot,
@@ -55,6 +55,27 @@ const fieldClass =
 
 const labelClass = "block text-[11px] font-semibold text-slate-400 mb-1.5";
 
+function formSnapshot(form: FormState): string {
+  return JSON.stringify({
+    name: form.name.trim(),
+    description: form.description,
+    modelId: form.modelId,
+    temperature: Number(form.temperature),
+    systemPrompt: form.systemPrompt,
+    groupIds: [...form.groupIds].sort(),
+    knowledgeBases: [...form.knowledgeBases]
+      .map((item) => ({ id: item.knowledgeBaseId, mode: item.mode }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+    tools: [...form.tools]
+      .map((item) => ({ id: item.toolId, type: item.toolType }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+    memoryEnabled: form.memoryEnabled,
+    memoryScope: form.memoryEnabled ? form.memoryScope : "",
+    memoryRetention: form.memoryEnabled ? form.memoryRetention : "",
+    memoryInstructions: form.memoryInstructions.trim(),
+  });
+}
+
 export const AgentStudioView: React.FC = () => {
   const {
     agents,
@@ -93,6 +114,14 @@ export const AgentStudioView: React.FC = () => {
   const [formTab, setFormTab] = useState<FormTabKey>("access");
   const [modalOpen, setModalOpen] = useState(false);
   const [openRemoteServerIds, setOpenRemoteServerIds] = useState<string[]>([]);
+  const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const [optionsGroupKey, setOptionsGroupKey] = useState("");
+  const [resourceNote, setResourceNote] = useState("");
+  const optionsRequest = useRef(0);
+  const optionsRef = useRef<AgentEditorOptionsDto | null>(null);
+  const formRef = useRef(form);
+  formRef.current = form;
 
   const readOnly = mode === "edit" && !canEdit;
 
@@ -119,16 +148,21 @@ export const AgentStudioView: React.FC = () => {
    *
    * Therefore the client does NOT perform another group-based filtering pass.
    */
-  const visibleModels = useMemo(() => options?.models ?? [], [options]);
+  const groupKey = form.groupIds.slice().sort().join(",");
+  const resourcesReady = optionsGroupKey === groupKey && !optionsLoading;
+  const visibleModels = useMemo(
+    () => (resourcesReady ? options?.models ?? [] : []),
+    [options, resourcesReady],
+  );
 
   const pickerKnowledgeBases = useMemo(
-    () => options?.knowledgeBases ?? [],
-    [options],
+    () => (resourcesReady ? options?.knowledgeBases ?? [] : []),
+    [options, resourcesReady],
   );
 
   const remoteServers = useMemo(
-    () => options?.remoteMcpServers ?? [],
-    [options],
+    () => (resourcesReady ? options?.remoteMcpServers ?? [] : []),
+    [options, resourcesReady],
   );
 
   const remoteTools = useMemo(
@@ -147,67 +181,85 @@ export const AgentStudioView: React.FC = () => {
   );
 
   const localTools = useMemo(
-    () => (options?.tools ?? []).filter((t) => t.toolType !== "Remote"),
-    [options],
+    () =>
+      resourcesReady
+        ? (options?.tools ?? []).filter((t) => t.toolType !== "Remote")
+        : [],
+    [options, resourcesReady],
   );
 
   const loadOptions = async (groupIds: string[]) => {
+    const requestId = ++optionsRequest.current;
+    const key = groupIds.slice().sort().join(",");
+    setOptionsLoading(true);
     try {
       const next = normalizeEditorOptions(
         await agentsApi.getEditorOptions(groupIds),
       );
+      if (requestId !== optionsRequest.current) return;
 
+      const previous = optionsRef.current;
+      const current = formRef.current;
+      optionsRef.current = next;
       setOptions(next);
+      setOptionsGroupKey(key);
 
-      setForm((current) => {
-        const modelIds = new Set((next.models ?? []).map((m) => m.id));
-
-        const kbIds = new Set((next.knowledgeBases ?? []).map((k) => k.id));
-
-        const toolIds = new Set([
-          ...(next.tools ?? []).map((t) => t.id),
-          ...(next.remoteMcpServers ?? []).flatMap((server) =>
-            server.tools.map((tool) => tool.id),
-          ),
-        ]);
-
-        return {
-          ...current,
-          modelId: modelIds.has(current.modelId) ? current.modelId : "",
-          knowledgeBases: current.knowledgeBases.filter((k) =>
-            kbIds.has(k.knowledgeBaseId),
-          ),
-          tools: current.tools.filter((t) => toolIds.has(t.toolId)),
-        };
-      });
+      const modelIds = new Set((next.models ?? []).map((m) => m.id));
+      const kbIds = new Set((next.knowledgeBases ?? []).map((k) => k.id));
+      const toolIds = new Set([
+        ...(next.tools ?? []).map((t) => t.id),
+        ...(next.remoteMcpServers ?? []).flatMap((server) =>
+          server.tools.map((tool) => tool.id),
+        ),
+      ]);
+      const removed: string[] = [];
+      if (current.modelId && !modelIds.has(current.modelId)) {
+        removed.push(
+          previous?.models?.find((model) => model.id === current.modelId)?.name ||
+            "the selected model",
+        );
+      }
+      for (const kb of current.knowledgeBases) {
+        if (!kbIds.has(kb.knowledgeBaseId)) {
+          removed.push(kb.knowledgeBaseName || "a knowledge base");
+        }
+      }
+      for (const tool of current.tools) {
+        if (!toolIds.has(tool.toolId)) {
+          removed.push(tool.toolName || "a tool");
+        }
+      }
+      setForm((latest) => ({
+        ...latest,
+        modelId: modelIds.has(latest.modelId) ? latest.modelId : "",
+        knowledgeBases: latest.knowledgeBases.filter((k) =>
+          kbIds.has(k.knowledgeBaseId),
+        ),
+        tools: latest.tools.filter((t) => toolIds.has(t.toolId)),
+      }));
+      setResourceNote(
+        removed.length
+          ? `These no longer belong to the selected groups and were removed: ${removed.join(", ")}. Save to update the agent.`
+          : "",
+      );
     } catch (e) {
+      if (requestId !== optionsRequest.current) return;
       setError(
         e instanceof Error
           ? e.message
           : "Failed to load editor options (models / KBs / tools).",
       );
+    } finally {
+      if (requestId === optionsRequest.current) setOptionsLoading(false);
     }
   };
 
-  /*
-   * The sorted group selection is used as the dependency key.
-   * This means:
-   *
-   * [A, B] === [B, A]
-   *
-   * from the API-fetch perspective, so changing checkbox order does not
-   * trigger an unnecessary reload.
-   */
-  const groupKey = form.groupIds.slice().sort().join(",");
-
   useEffect(() => {
     if (!modalOpen) return;
-
     void loadOptions(form.groupIds);
-
     // groupKey is the sorted selection, so order of clicks does not refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupKey]);
+  }, [groupKey, modalOpen]);
 
   /*
    * One group available: pre-select it when creating.
@@ -247,6 +299,8 @@ export const AgentStudioView: React.FC = () => {
       groupIds: initialGroups,
     });
 
+    setSavedSnapshot(null);
+    setResourceNote("");
     setError("");
     setModalOpen(true);
   };
@@ -265,7 +319,7 @@ export const AgentStudioView: React.FC = () => {
 
       setDetail(agent);
 
-      setForm({
+      const next = {
         name: agent.name,
         description: agent.description,
         modelId: agent.modelId,
@@ -278,7 +332,10 @@ export const AgentStudioView: React.FC = () => {
         memoryScope: agent.memoryScope || "User",
         memoryRetention: agent.memoryRetention || "Days30",
         memoryInstructions: agent.memoryInstructions,
-      });
+      };
+      setForm(next);
+      setSavedSnapshot(formSnapshot(next));
+      setResourceNote("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load agent.");
     } finally {
@@ -444,6 +501,7 @@ export const AgentStudioView: React.FC = () => {
         showNotification?.(`Saved ${updated.name}`);
 
         setDetail(normalizeAgent(updated));
+        setSavedSnapshot(formSnapshot(form));
         await reloadPlatformData();
       }
     } catch (err) {
@@ -475,6 +533,9 @@ export const AgentStudioView: React.FC = () => {
       setLoading(false);
     }
   };
+
+  const dirty = savedSnapshot === null || formSnapshot(form) !== savedSnapshot;
+  const publishDisabled = loading || dirty || !selectedId;
 
   const publish = async (publish: boolean) => {
     if (!selectedId || !canPublish) return;
@@ -657,9 +718,10 @@ export const AgentStudioView: React.FC = () => {
                 detail?.status === "Published" && (
                   <button
                     type="button"
-                    disabled={loading}
+                    disabled={loading || dirty}
+                    title={dirty ? "Save changes before unpublishing" : "Unpublish"}
                     onClick={() => void publish(false)}
-                    className="px-3.5 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs transition-colors"
+                    className="px-3.5 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs transition-colors disabled:opacity-40"
                   >
                     <XCircle className="w-3.5 h-3.5 inline mr-1" />
                     Unpublish
@@ -671,9 +733,14 @@ export const AgentStudioView: React.FC = () => {
                 detail?.status !== "Published" && (
                   <button
                     type="button"
-                    disabled={loading}
+                    disabled={publishDisabled}
+                    title={dirty ? "Save the agent before publishing" : "Publish the saved agent"}
                     onClick={() => void publish(true)}
-                    className="px-3.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs transition-colors"
+                    className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors disabled:opacity-40 ${
+                      publishDisabled
+                        ? "bg-slate-800 text-slate-400"
+                        : "bg-emerald-600 hover:bg-emerald-500 text-white ring-2 ring-emerald-300"
+                    }`}
                   >
                     <Upload className="w-3.5 h-3.5 inline mr-1" />
                     Publish
@@ -684,12 +751,16 @@ export const AgentStudioView: React.FC = () => {
                 <button
                   type="submit"
                   form="agent-studio-form"
-                  disabled={loading}
-                  className="px-3.5 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold transition-colors"
+                  disabled={loading || (mode === "edit" && !dirty)}
+                  className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors disabled:opacity-40 ${
+                    mode === "create" || dirty
+                      ? "bg-purple-600 hover:bg-purple-500 text-white ring-2 ring-purple-300"
+                      : "bg-slate-800 text-slate-400"
+                  }`}
                 >
                   <Save className="w-3.5 h-3.5 inline mr-1" />
 
-                  {mode === "create" ? "Create" : "Save"}
+                  {mode === "create" ? "Save draft" : dirty ? "Save changes" : "Saved"}
                 </button>
               )}
             </>
@@ -726,6 +797,22 @@ export const AgentStudioView: React.FC = () => {
                 <AlertCircle className="w-4 h-4 inline mr-1" />
                 {error}
               </div>
+            )}
+
+            {dirty && mode === "edit" && (
+              <p className="text-[11px] text-amber-300">
+                Save before publishing. Publish uses the last saved agent, including its groups, model, knowledge bases, and tools.
+              </p>
+            )}
+
+            {optionsLoading && (
+              <p className="text-[11px] text-slate-400">
+                Updating models, knowledge bases, and tools for the selected groups…
+              </p>
+            )}
+
+            {resourceNote && (
+              <p className="text-[11px] text-amber-300">{resourceNote}</p>
             )}
 
             {formTab === "access" && (
