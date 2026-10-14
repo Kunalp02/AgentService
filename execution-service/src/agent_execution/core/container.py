@@ -20,6 +20,9 @@ from agent_execution.infrastructure.persistence.run_repository import RunReposit
 from agent_execution.infrastructure.persistence.thread_repository import (
     ThreadRepository,
 )
+from agent_execution.infrastructure.persistence.workflow_repository import (
+    WorkflowRepository,
+)
 from agent_execution.infrastructure.platform.platform_clients import PlatformClients
 from agent_execution.services.agent_execution_service import AgentExecutionService
 from agent_execution.services.audit_service import AuditService
@@ -29,6 +32,7 @@ from agent_execution.services.run_slots import RunSlots
 from agent_execution.services.storage_client import StorageClient
 from agent_execution.services.thread_service import ThreadService
 from agent_execution.services.worker import ExecutionWorker
+from agent_execution.services.workflow_service import WorkflowService
 from agent_execution.settings import Settings
 
 
@@ -50,6 +54,7 @@ class ApplicationContainer:
     cleanup_service: CleanupService = field(init=False)
     worker: ExecutionWorker = field(init=False)
     audit_service: AuditService = field(init=False)
+    workflow_service: WorkflowService = field(init=False)
 
     def __post_init__(self) -> None:
         self.database = Database(self.settings.database_url())
@@ -100,6 +105,11 @@ class ApplicationContainer:
             self.settings, self.runs, self.execution_service, self.cleanup_service
         )
         self.audit_service = AuditService(self.runs, self.thread_service)
+        self.workflow_service = WorkflowService(
+            WorkflowRepository(self.database),
+            self.thread_service,
+            self.execution_service,
+        )
         self.deployment_service = DeploymentService(
             self.deployments,
             self.graph_context.manifest_service,

@@ -10,6 +10,7 @@ import { RoleProfileView } from './components/roles/RoleProfileView';
 import { ToolsManagementView } from './components/tools/ToolsManagementView';
 import { KnowledgeManagementView } from './components/knowledge/KnowledgeManagementView';
 import { AgentStudioView } from './components/agents/AgentStudioView';
+import { WorkflowView } from './components/workflows/WorkflowView';
 import { PlaygroundView } from './components/playground/PlaygroundView';
 import { AuditLogsView } from './components/audit/AuditLogsView';
 import { GatewayModelRegistryView } from './components/gateway/GatewayModelRegistryView';
@@ -17,7 +18,7 @@ import { GatewayModelRegistryView } from './components/gateway/GatewayModelRegis
 const MainContent: React.FC = () => {
   const { activeView, isAuthenticated, theme, canAccessView, setActiveView, sessionRestoring, permissions } = usePlatform();
 
-  const fallbackOrder = ['dashboard', 'users', 'roles', 'tools', 'knowledge', 'agents', 'model-registry', 'playground'];
+  const fallbackOrder = ['dashboard', 'users', 'roles', 'tools', 'knowledge', 'agents', 'workflows', 'model-registry', 'playground'];
   const effectiveView = canAccessView(activeView)
     ? activeView
     : fallbackOrder.find((v) => canAccessView(v)) ?? null;
@@ -67,6 +68,8 @@ const MainContent: React.FC = () => {
         return <KnowledgeManagementView />;
       case 'agents':
         return <AgentStudioView />;
+      case 'workflows':
+        return <WorkflowView />;
       case 'playground':
         return <PlaygroundView />;
       case 'audit':
