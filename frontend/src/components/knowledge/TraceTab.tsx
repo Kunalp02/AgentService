@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { msg, post } from '../../rag/apiClient';
@@ -574,3 +573,4 @@ export const TraceTab: React.FC = () => {
     </div>
   );
 };
+

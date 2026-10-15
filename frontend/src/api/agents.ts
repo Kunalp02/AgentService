@@ -1,4 +1,3 @@
-
 import { authTokenStore } from "./authTokenStore";
 import { serviceUrl } from "../config/api";
 import type {
@@ -104,3 +103,4 @@ export const agentsApi = {
   unpublishAgent: (id: string) =>
     request<AgentDto>(`/${id}/unpublish`, { method: "POST" }),
 };
+

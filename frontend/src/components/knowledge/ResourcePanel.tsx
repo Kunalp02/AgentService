@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import { Cpu } from 'lucide-react';
 import { get } from '../../rag/apiClient';

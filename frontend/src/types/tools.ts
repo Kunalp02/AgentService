@@ -1,4 +1,3 @@
-
 /**
  * Mirrors ccil.aiplatform.tools_config (RemoteMcpServers + LocalTools controllers).
  */

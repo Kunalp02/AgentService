@@ -1,4 +1,3 @@
-
 import { localToolsApi } from './localToolsApi';
 import { remoteToolsApi } from './remoteToolsApi';
 
@@ -8,3 +7,4 @@ export const toolsApi = {
   getRemoteTools: (page = 1, pageSize = 25) => remoteToolsApi.list({ page, pageSize }),
   createRemoteTool: (data: Parameters<typeof remoteToolsApi.create>[0]) => remoteToolsApi.create(data),
 };
+

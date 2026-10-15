@@ -1,4 +1,3 @@
-
 import type {} from 'redux-persist';
 import { authTokenStore } from './authTokenStore';
 import { serviceUrl } from '../config/api';

@@ -1,4 +1,3 @@
-
 export type UserStatus =
   | "PendingApproval"
   | "Active"
@@ -38,3 +37,4 @@ export interface IntrospectResponse {
   permissions: string[] | string | null;
   exp: number | null;
 }
+

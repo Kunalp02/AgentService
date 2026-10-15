@@ -1,4 +1,3 @@
-
 import React, { useCallback, useEffect, useState } from 'react';
 import { Clock, FileText, Trash2, Upload } from 'lucide-react';
 
@@ -204,3 +203,4 @@ export const StagedFiles: React.FC<{
     </Card>
   );
 };
+

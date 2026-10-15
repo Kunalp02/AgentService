@@ -1,4 +1,3 @@
-
 import { store } from '../store';
 
 type Directory = Record<string, string>;
@@ -89,3 +88,4 @@ export function userGroupEntries(groups: unknown): Array<{
 export function userGroupIds(groups: unknown): string[] {
   return userGroupEntries(groups).map((g) => g.id);
 }
+

@@ -1,4 +1,3 @@
-
 export interface GroupDto {
   id: string;
   name: string | null;
@@ -106,3 +105,4 @@ export interface UpdateUserAssignmentsRequest {
   roleProfileId?: string | null;
   groupIds?: string[];
 }
+

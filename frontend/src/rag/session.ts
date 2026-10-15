@@ -1,4 +1,3 @@
-
 import { store } from '../store';
 import { logout as logoutAction } from '../store/authSlice';
 
@@ -112,3 +111,4 @@ export const isSignedIn = () =>
 if (typeof window !== 'undefined') {
   (window as any).__ragSession = () => getSession();
 }
+

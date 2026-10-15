@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from 'react';
 import { ENGINE_API } from './apiClient';
 import { KbSummary } from './ragTypes';
@@ -40,3 +39,4 @@ export function useEngineKbs() {
 
   return { kbs, error };
 }
+

@@ -1,6 +1,5 @@
 
 
-
 export interface KbSummary {
   id?: string;
   /** The CONTRACT's Guid, for PUT and DELETE. `id` is the engine's kb_ id and
@@ -174,3 +173,4 @@ export const LIMITS = {
   name: 128,
   description: 1024,
 } as const;
+

@@ -1,4 +1,3 @@
-
 {
   "name": "Enterprise AI Platform V 1.0",
   "description": "Enterprise AI platform featuring Keycloak AD authentication, RBAC role profiles, group isolation, Python tool authoring with GenAI code assistant, MCP server integration, AI gateways, RAG knowledge bases with vector DB strategies, and an interactive multi-agent playground.",

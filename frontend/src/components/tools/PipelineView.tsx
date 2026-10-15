@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { AlertTriangle, CheckCircle2, Circle, Loader2, ShieldAlert, XCircle } from 'lucide-react';
 import type { EvaluationResult } from '../../api/localToolEvaluationApi';

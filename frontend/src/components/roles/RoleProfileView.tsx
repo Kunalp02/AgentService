@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { ShieldCheck, Plus, Edit2, Trash2, Check, Lock, Layers } from 'lucide-react';
 import { usePlatform } from '../../context/PlatformContext';

@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 import { FileText, Database, Upload, CheckCircle2, Globe } from 'lucide-react';
 import { get, msg, post } from '../../rag/apiClient';
@@ -594,3 +593,4 @@ const FromFiles: React.FC = () => {
     </div>
   );
 };
+

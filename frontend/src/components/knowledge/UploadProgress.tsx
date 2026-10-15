@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import { Check, X } from 'lucide-react';
 import { fileHeaders, get, withKb } from '../../rag/apiClient';

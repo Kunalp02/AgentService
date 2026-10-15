@@ -1,4 +1,3 @@
-
 import { authTokenStore } from './authTokenStore';
 import { serviceUrl } from '../config/api';
 import type { WorkspaceFileDto } from '../types/tools';

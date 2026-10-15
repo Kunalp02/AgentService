@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import { groupName, userGroupIds } from '../../api/groupDirectory';
 import { Database, Plus, Users, AlertTriangle } from 'lucide-react';
@@ -439,3 +438,4 @@ export const CreateKbTab: React.FC<{
     </Modal>
   );
 };
+

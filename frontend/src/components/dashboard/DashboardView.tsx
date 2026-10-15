@@ -1,4 +1,3 @@
-
 import React from "react";
 import {
   Users,
@@ -248,3 +247,4 @@ export const DashboardView: React.FC = () => {
     </div>
   );
 };
+

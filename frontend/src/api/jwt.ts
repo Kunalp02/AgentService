@@ -1,4 +1,3 @@
-
 /**
  * Decodes a JWT payload without verifying the signature. This is safe to use
  * client-side ONLY for reading claims to pre-fill UI state — the backend is
