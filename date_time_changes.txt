@@ -9,6 +9,13 @@ DELETED:
 - frontend/src/components/workflows/WorkflowView.tsx
 
 NEW FILES:
+- frontend/src/api/workflows.ts
+- execution-service/src/agent_execution/schemas/workflows.py
+- execution-service/src/agent_execution/services/workflow_engine.py
+- execution-service/src/agent_execution/services/workflow_service.py
+- execution-service/src/agent_execution/infrastructure/persistence/workflow_repository.py
+- execution-service/src/agent_execution/api/controllers/workflow_controller.py
+- execution-service/tests/test_workflow_engine.py
 - frontend/src/components/layout/ThemeToggle.tsx
 - frontend/src/components/tools/LocalToolTestModal.tsx
 - frontend/src/components/workflow/WorkflowNode.tsx
