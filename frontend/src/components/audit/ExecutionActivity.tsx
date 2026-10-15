@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from "react";
 import { Activity } from "lucide-react";
 import { usePlatform } from "../../context/PlatformContext";
@@ -107,3 +106,4 @@ export const ExecutionActivity: React.FC = () => {
     </div>
   );
 };
+

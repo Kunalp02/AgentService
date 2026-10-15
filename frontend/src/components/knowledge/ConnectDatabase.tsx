@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import { Server } from 'lucide-react';
 import { cfg, get, msg, post } from '../../rag/apiClient';
@@ -309,3 +308,4 @@ export const ConnectDatabase: React.FC<{ onConnected?: () => void }> = ({ onConn
     </Card>
   );
 };
+

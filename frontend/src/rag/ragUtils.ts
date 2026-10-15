@@ -1,5 +1,4 @@
 
-
 /* Small helpers shared by the RAG screens. Each one exists because the
    obvious version of it broke something real. */
 
@@ -79,3 +78,4 @@ export const labelOf = (list: { name: string; label: string }[], key: string) =>
   const m = list.find((x) => x.name === key);
   return m ? m.label : key;
 };
+

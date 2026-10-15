@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 
@@ -471,3 +470,4 @@ export const ConfirmDelete: React.FC<{
     </Modal>
   );
 };
+

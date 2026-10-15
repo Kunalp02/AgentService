@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import { Download, FileText, RotateCcw, Trash2 } from 'lucide-react';
 import { del, fileHeaders, get, msg, post, withKb } from '../../rag/apiClient';
@@ -596,3 +595,4 @@ footer={
     </div>
   );
 };
+

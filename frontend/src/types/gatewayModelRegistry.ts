@@ -1,4 +1,3 @@
-
 /**
  * Types mirror ccil.aiplatform.tools_config's OpenAPI schema exactly
  * (AiGatewayDto / ModelRegistryDto and their Create/Update request DTOs).

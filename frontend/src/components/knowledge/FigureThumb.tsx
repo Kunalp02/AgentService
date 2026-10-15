@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import { fileHeaders, get, withKb } from '../../rag/apiClient';
 
@@ -97,3 +96,4 @@ export const FigureThumb: React.FC<{ claim: string; source: string }> = ({ claim
     </div>
   );
 };
+

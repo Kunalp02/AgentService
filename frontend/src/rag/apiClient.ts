@@ -1,4 +1,3 @@
-
 import { serviceUrl } from '../config/api';
 import { store } from '../store';
 import { authHeaders } from './session';

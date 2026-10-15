@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import { groupName } from '../../api/groupDirectory';
 import { AlertTriangle, Database, RefreshCw } from 'lucide-react';
@@ -505,3 +504,4 @@ export const StorePicker: React.FC<{
     </div>
   );
 };
+

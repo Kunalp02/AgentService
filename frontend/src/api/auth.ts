@@ -1,4 +1,3 @@
-
 import type { IntrospectResponse, LoginRequest, LoginResponse } from '../types/auth';
 import { serviceUrl } from '../config/api';
 
@@ -78,3 +77,4 @@ export const authApi = {
     return data;
   },
 };
+

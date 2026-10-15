@@ -1,4 +1,3 @@
-
 import { authTokenStore } from './authTokenStore';
 import { serviceUrl } from '../config/api';
 import { handleUnauthorized } from './sessionGuard';
@@ -37,3 +36,4 @@ export const authApiClient = {
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 };
+

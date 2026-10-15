@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import {
   Shield,
@@ -20,6 +19,8 @@ import { groupName } from '@/src/api/groupDirectory';
 import { BACKEND_DISPLAY_URL } from '../../config/api';
 import Logo from "../../assets/images/logo_light.svg";
 import DarkLogo from "../../assets/images/logo_dark.svg";
+import { ThemeToggle } from '../layout/ThemeToggle';
+
 
 export const Header: React.FC = () => {
   const {
@@ -51,7 +52,7 @@ export const Header: React.FC = () => {
             </div> */}
             <div>
               <div className="flex items-center space-x-2">
-                <span className={`flex items-center font-bold text-3xl tracking-tight text-gradient-effect relative ${theme === 'light' ? 'text-slate-900' : 'text-white'}`}><BrainCircuit className="w-7 h-7 mr-2 text-indigo-400" />KRUTI AI <Astroid fill='#ffffff' className="w-4 h-4 absolute right-0 top-0" style={{'marginRight' : '-10px', 'marginTop' : '-7px'}}/></span>
+                <span className={`flex items-center font-bold text-3xl tracking-tight text-gradient-effect relative ${theme === 'light' ? 'text-slate-900' : 'text-white'}`}><BrainCircuit className="w-7 h-7 mr-2 text-indigo-400" />KRUTI AI <Astroid fill={theme === 'light' ? 'var(--accent)' : '#ffffff'} className="w-4 h-4 absolute right-0 top-0" style={{'marginRight' : '-10px', 'marginTop' : '-7px'}}/></span>
                 
                 <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${theme === 'light' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-indigo-950 text-indigo-300 border-indigo-700/60'} border`}>
                   ENTERPRISE
@@ -63,7 +64,7 @@ export const Header: React.FC = () => {
 
         {/* Action Controls & User Switcher */}
         <div className="flex items-center space-x-3">
-          {/* Theme Toggle */}
+          <ThemeToggle />
           {/* <button
             onClick={() => setTheme(theme === 'light' ? 'dark' : theme === 'dark' ? 'enterprise' : 'light')}
             className={`p-1.5 rounded-lg transition-colors ${theme === 'light' ? 'text-slate-500 hover:text-slate-700 hover:bg-slate-100' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}
@@ -172,3 +173,4 @@ export const Header: React.FC = () => {
     </header>
   );
 };
+

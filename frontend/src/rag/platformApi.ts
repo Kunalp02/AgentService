@@ -1,4 +1,3 @@
-
 import { cfg } from './apiClient';
 import { hasNames } from '../api/groupDirectory';
 
@@ -88,3 +87,4 @@ export const pipelineStages = (): Promise<{ stage: string; options: StageOption[
   cfg('GET', '/pipeline-stages');
 
 export const mySession = (): Promise<SessionReply> => cfg('GET', '/my/session');
+

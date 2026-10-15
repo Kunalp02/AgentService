@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Shield, Key, User, Lock, Cpu, ArrowRight, Clock, AlertCircle, BrainCircuit, Sparkle, Astroid } from 'lucide-react';
 import { usePlatform } from '../../context/PlatformContext';
@@ -49,7 +48,7 @@ export const LoginPage: React.FC = () => {
             <img src={DarkLogo} alt="KRUTI AI"/>
           </div> */}
           <div className='text-center'>
-             <div className={`flex items-center justify-center font-bold text-4xl tracking-tight text-gradient-effect ${theme === 'light' ? 'text-slate-900' : 'text-white'}`}><span className='relative flex items-center'><BrainCircuit className="w-7 h-7 mr-2 text-indigo-400" />KRUTI AI <Astroid fill='#ffffff' className="w-4 h-4 absolute right-0 top-0" style={{'marginRight' : '-10px', 'marginTop' : '-7px'}}/></span></div>
+             <div className={`flex items-center justify-center font-bold text-4xl tracking-tight text-gradient-effect ${theme === 'light' ? 'text-slate-900' : 'text-white'}`}><span className='relative flex items-center'><BrainCircuit className="w-7 h-7 mr-2 text-indigo-400" />KRUTI AI <Astroid fill={theme === 'light' ? 'var(--accent)' : '#ffffff'} className="w-4 h-4 absolute right-0 top-0" style={{'marginRight' : '-10px', 'marginTop' : '-7px'}}/></span></div>
             <p className={`text-sm ${theme === 'light' ? 'text-gray-800' : 'text-gray-200'}`}>
               Sign in with your corporate account
             </p>
@@ -146,3 +145,4 @@ export const LoginPage: React.FC = () => {
     </div>
   );
 };
+

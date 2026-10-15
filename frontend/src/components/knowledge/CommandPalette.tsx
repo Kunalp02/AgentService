@@ -1,4 +1,3 @@
-
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { groupName } from '../../api/groupDirectory';
 import { CornerDownLeft, Database, FileText, Search, Sliders } from 'lucide-react';
@@ -292,3 +291,4 @@ export const CommandPalette: React.FC<{
     </div>
   );
 };
+

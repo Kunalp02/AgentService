@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 import { BookOpen, ChevronDown, ChevronRight, Send, Upload } from 'lucide-react';
 import { get, msg, post } from '../../rag/apiClient';
@@ -374,3 +373,4 @@ export const AgentContext: React.FC = () => {
     </Card>
   );
 };
+

@@ -1,4 +1,3 @@
-
 const clean = (value: string | undefined): string => (value || '').trim().replace(/\/+$/, '');
 const cleanPrefix = (value: string | undefined): string => {
   const v = (value || '').trim();
@@ -48,3 +47,4 @@ export function serviceUrl(service: ServiceName, path = ''): string {
   const normalizedPath = path.startsWith('/') ? path : `${path}`;
   return `${base}${prefix}${normalizedPath}`;
 }
+

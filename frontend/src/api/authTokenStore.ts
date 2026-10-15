@@ -1,4 +1,3 @@
-
 import { store } from '../store';
 
 export const authTokenStore = {
@@ -10,3 +9,4 @@ export const authTokenStore = {
     // keeps compiling without changes.
   },
 };
+

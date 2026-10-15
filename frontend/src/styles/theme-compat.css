@@ -1,0 +1,282 @@
+/* =====================================================================
+   LIGHT-THEME COMPATIBILITY LAYER   (generated — do not edit by hand)
+
+   Maps the dark Tailwind classes that existing screens hard-code, and the
+   light classes the theme-aware screens already use, onto the tokens in
+   theme.css. Active only for <html data-theme="light">; dark is untouched.
+   To change colours, edit theme.css. Unlayered on purpose so it beats
+   Tailwind's utilities layer.
+   ===================================================================== */
+
+/* ---- page, shell and cards ------------------------------------------- */
+[data-theme="light"] .background_light,
+[data-theme="light"] .login_background_light { background: var(--app-bg); background-color: var(--bg-app); }
+
+[data-theme="light"] #platform-header {
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border-bottom-color: var(--border);
+  box-shadow: 0 1px 0 var(--border), 0 6px 20px rgba(11, 27, 51, 0.05);
+}
+[data-theme="light"] #platform-sidebar {
+  background: var(--surface); border-color: var(--border);
+  box-shadow: var(--shadow-card); backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+[data-theme="light"] .panel {
+  background: var(--surface); border-color: var(--border);
+  box-shadow: var(--shadow-card); backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+[data-theme="light"] #login-modal {
+  background: var(--surface); border-color: var(--border);
+  box-shadow: var(--shadow-pop); backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+
+/* classes the theme-aware screens use for their own light styling */
+[data-theme="light"] .bg-slate-950\/5,
+[data-theme="light"] .bg-slate-100\/5 { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+[data-theme="light"] .bg-slate-900\/10,
+[data-theme="light"] .bg-slate-600\/10 { background: var(--surface-2); }
+[data-theme="light"] .bg-slate-300\/8 { background: var(--surface-sunken); }
+[data-theme="light"] .border-neutral-900\/5,
+[data-theme="light"] .border-neutral-900\/10,
+[data-theme="light"] .border-slate-400\/40,
+[data-theme="light"] .border-slate-400\/50,
+[data-theme="light"] .border-slate-300 { border-color: var(--border); }
+[data-theme="light"] .hover\:bg-slate-200\/50:hover,
+[data-theme="light"] .hover\:bg-slate-800\/50:hover { background: var(--row-hover); }
+
+/* ---- global polish ---------------------------------------------------- */
+[data-theme="light"] ::selection { background: var(--selection); }
+[data-theme="light"] ::placeholder { color: var(--text-faint); opacity: .85; }
+[data-theme="light"] button:focus-visible,
+[data-theme="light"] a:focus-visible,
+[data-theme="light"] summary:focus-visible,
+[data-theme="light"] [role="button"]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 2px;
+}
+[data-theme="light"] * { scrollbar-color: var(--scroll-thumb) transparent; }
+[data-theme="light"] ::-webkit-scrollbar { width: 10px; height: 10px; }
+[data-theme="light"] ::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+[data-theme="light"] ::-webkit-scrollbar-track { background: transparent; }
+
+/* toast: dark chip so it stands out on a light page */
+[data-theme="light"] .fixed.bottom-6.bg-slate-100 { background: var(--text-strong); color: #fff; }
+
+/* ---- generated: surfaces (dark classes -> tokens) -------------------- */
+
+[data-theme="light"] .bg-slate-950 { background: var(--surface-sunken); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-950\/20 { background: color-mix(in srgb, var(--surface-sunken) 70%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-950\/25 { background: color-mix(in srgb, var(--surface-sunken) 70%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-950\/30 { background: color-mix(in srgb, var(--surface-sunken) 70%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-950\/40 { background: color-mix(in srgb, var(--surface-sunken) 70%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-950\/50 { background: color-mix(in srgb, var(--surface-sunken) 70%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-950\/60 { background: color-mix(in srgb, var(--surface-sunken) 70%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-950\/70 { background: color-mix(in srgb, var(--surface-sunken) 70%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-950\/75 { background: color-mix(in srgb, var(--surface-sunken) 75%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-950\/80 { background: color-mix(in srgb, var(--surface-sunken) 80%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-950\/85 { background: color-mix(in srgb, var(--surface-sunken) 85%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-950\/90 { background: color-mix(in srgb, var(--surface-sunken) 90%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-950\/95 { background: color-mix(in srgb, var(--surface-sunken) 95%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-900 { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-900\/20 { background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-900\/25 { background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-900\/30 { background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-900\/40 { background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-900\/50 { background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-900\/60 { background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-900\/70 { background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-900\/75 { background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-900\/80 { background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-900\/85 { background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-900\/90 { background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-900\/95 { background: color-mix(in srgb, var(--surface) 95%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-800 { background: var(--surface-2); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-800\/10 { background: color-mix(in srgb, var(--surface-2) 75%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-800\/20 { background: color-mix(in srgb, var(--surface-2) 75%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-800\/25 { background: color-mix(in srgb, var(--surface-2) 75%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-800\/30 { background: color-mix(in srgb, var(--surface-2) 75%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-800\/40 { background: color-mix(in srgb, var(--surface-2) 75%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-800\/50 { background: color-mix(in srgb, var(--surface-2) 75%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-800\/60 { background: color-mix(in srgb, var(--surface-2) 75%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-800\/70 { background: color-mix(in srgb, var(--surface-2) 75%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-800\/75 { background: color-mix(in srgb, var(--surface-2) 75%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-800\/80 { background: color-mix(in srgb, var(--surface-2) 80%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-800\/85 { background: color-mix(in srgb, var(--surface-2) 85%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-800\/90 { background: color-mix(in srgb, var(--surface-2) 90%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-800\/95 { background: color-mix(in srgb, var(--surface-2) 95%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-700 { background: var(--surface-3); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-700\/10 { background: color-mix(in srgb, var(--surface-3) 70%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-700\/20 { background: color-mix(in srgb, var(--surface-3) 70%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-700\/25 { background: color-mix(in srgb, var(--surface-3) 70%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-700\/30 { background: color-mix(in srgb, var(--surface-3) 70%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-700\/40 { background: color-mix(in srgb, var(--surface-3) 70%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-700\/50 { background: color-mix(in srgb, var(--surface-3) 70%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-700\/60 { background: color-mix(in srgb, var(--surface-3) 70%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-700\/70 { background: color-mix(in srgb, var(--surface-3) 70%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-700\/75 { background: color-mix(in srgb, var(--surface-3) 75%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-700\/80 { background: color-mix(in srgb, var(--surface-3) 80%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-700\/85 { background: color-mix(in srgb, var(--surface-3) 85%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-700\/90 { background: color-mix(in srgb, var(--surface-3) 90%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .bg-slate-700\/95 { background: color-mix(in srgb, var(--surface-3) 95%, transparent); backdrop-filter: none; -webkit-backdrop-filter: none }
+[data-theme="light"] .hover\:bg-slate-800:hover { background-color: var(--surface-3) }
+[data-theme="light"] .hover\:bg-slate-800\/40:hover { background-color: color-mix(in srgb, var(--surface-3) 60%, transparent) }
+[data-theme="light"] .hover\:bg-slate-800\/50:hover { background-color: color-mix(in srgb, var(--surface-3) 60%, transparent) }
+[data-theme="light"] .hover\:bg-slate-800\/60:hover { background-color: color-mix(in srgb, var(--surface-3) 60%, transparent) }
+[data-theme="light"] .hover\:bg-slate-800\/70:hover { background-color: color-mix(in srgb, var(--surface-3) 70%, transparent) }
+[data-theme="light"] .hover\:bg-slate-800\/80:hover { background-color: color-mix(in srgb, var(--surface-3) 80%, transparent) }
+[data-theme="light"] .hover\:bg-slate-800\/90:hover { background-color: color-mix(in srgb, var(--surface-3) 90%, transparent) }
+[data-theme="light"] .hover\:bg-slate-700:hover { background-color: var(--surface-3) }
+[data-theme="light"] .hover\:bg-slate-700\/40:hover { background-color: color-mix(in srgb, var(--surface-3) 60%, transparent) }
+[data-theme="light"] .hover\:bg-slate-700\/50:hover { background-color: color-mix(in srgb, var(--surface-3) 60%, transparent) }
+[data-theme="light"] .hover\:bg-slate-700\/60:hover { background-color: color-mix(in srgb, var(--surface-3) 60%, transparent) }
+[data-theme="light"] .hover\:bg-slate-700\/70:hover { background-color: color-mix(in srgb, var(--surface-3) 70%, transparent) }
+[data-theme="light"] .hover\:bg-slate-700\/80:hover { background-color: color-mix(in srgb, var(--surface-3) 80%, transparent) }
+[data-theme="light"] .hover\:bg-slate-700\/90:hover { background-color: color-mix(in srgb, var(--surface-3) 90%, transparent) }
+[data-theme="light"] .hover\:bg-slate-900:hover { background-color: var(--surface-3) }
+[data-theme="light"] .hover\:bg-slate-900\/40:hover { background-color: color-mix(in srgb, var(--surface-3) 60%, transparent) }
+[data-theme="light"] .hover\:bg-slate-900\/50:hover { background-color: color-mix(in srgb, var(--surface-3) 60%, transparent) }
+[data-theme="light"] .hover\:bg-slate-900\/60:hover { background-color: color-mix(in srgb, var(--surface-3) 60%, transparent) }
+[data-theme="light"] .hover\:bg-slate-900\/70:hover { background-color: color-mix(in srgb, var(--surface-3) 70%, transparent) }
+[data-theme="light"] .hover\:bg-slate-900\/80:hover { background-color: color-mix(in srgb, var(--surface-3) 80%, transparent) }
+[data-theme="light"] .hover\:bg-slate-900\/90:hover { background-color: color-mix(in srgb, var(--surface-3) 90%, transparent) }
+[data-theme="light"] .hover\:bg-slate-600:hover { background-color: var(--border-strong) }
+[data-theme="light"] .hover\:bg-slate-750:hover { background-color: var(--surface-3) }
+[data-theme="light"] [class*="bg-[#0f172a]"] { background-color: var(--surface) }
+[data-theme="light"] [class*="bg-[#0b1220]"] { background-color: var(--surface-2) }
+[data-theme="light"] [class*="bg-[#0b1120]"] { background-color: var(--bg-app) }
+[data-theme="light"] [class*="bg-[#070c17]"] { background-color: var(--surface-code) }
+[data-theme="light"] [class*="bg-[#0a1020]"] { background-color: var(--surface-2) }
+
+/* ---- generated: text -------------------------------------------------- */
+[data-theme="light"] .text-white:not(:is([class*=" bg-emerald-"], [class^="bg-emerald-"], [class*=" bg-indigo-"], [class^="bg-indigo-"], [class*=" bg-purple-"], [class^="bg-purple-"], [class*=" bg-rose-"], [class^="bg-rose-"], [class*=" bg-amber-"], [class^="bg-amber-"], [class*=" bg-sky-"], [class^="bg-sky-"], [class*=" bg-cyan-"], [class^="bg-cyan-"], [class*=" bg-blue-"], [class^="bg-blue-"], [class*=" bg-red-"], [class^="bg-red-"], [class*=" bg-violet-"], [class^="bg-violet-"], [class*=" bg-green-"], [class^="bg-green-"], [class*=" bg-orange-"], [class^="bg-orange-"], [class*=" bg-fuchsia-"], [class^="bg-fuchsia-"], [class*=" bg-teal-"], [class^="bg-teal-"], [class*=" bg-pink-"], [class^="bg-pink-"], [class*=" from-"], [class*=" bg-gradient"], .bg-active, [class*="btn-primary"])) { color: var(--text-strong) }
+[data-theme="light"] .text-slate-50:not(:is([class*=" bg-emerald-"], [class^="bg-emerald-"], [class*=" bg-indigo-"], [class^="bg-indigo-"], [class*=" bg-purple-"], [class^="bg-purple-"], [class*=" bg-rose-"], [class^="bg-rose-"], [class*=" bg-amber-"], [class^="bg-amber-"], [class*=" bg-sky-"], [class^="bg-sky-"], [class*=" bg-cyan-"], [class^="bg-cyan-"], [class*=" bg-blue-"], [class^="bg-blue-"], [class*=" bg-red-"], [class^="bg-red-"], [class*=" bg-violet-"], [class^="bg-violet-"], [class*=" bg-green-"], [class^="bg-green-"], [class*=" bg-orange-"], [class^="bg-orange-"], [class*=" bg-fuchsia-"], [class^="bg-fuchsia-"], [class*=" bg-teal-"], [class^="bg-teal-"], [class*=" bg-pink-"], [class^="bg-pink-"], [class*=" from-"], [class*=" bg-gradient"], .bg-active, [class*="btn-primary"])) { color: var(--text-strong) }
+[data-theme="light"] .text-slate-100:not(:is([class*=" bg-emerald-"], [class^="bg-emerald-"], [class*=" bg-indigo-"], [class^="bg-indigo-"], [class*=" bg-purple-"], [class^="bg-purple-"], [class*=" bg-rose-"], [class^="bg-rose-"], [class*=" bg-amber-"], [class^="bg-amber-"], [class*=" bg-sky-"], [class^="bg-sky-"], [class*=" bg-cyan-"], [class^="bg-cyan-"], [class*=" bg-blue-"], [class^="bg-blue-"], [class*=" bg-red-"], [class^="bg-red-"], [class*=" bg-violet-"], [class^="bg-violet-"], [class*=" bg-green-"], [class^="bg-green-"], [class*=" bg-orange-"], [class^="bg-orange-"], [class*=" bg-fuchsia-"], [class^="bg-fuchsia-"], [class*=" bg-teal-"], [class^="bg-teal-"], [class*=" bg-pink-"], [class^="bg-pink-"], [class*=" from-"], [class*=" bg-gradient"], .bg-active, [class*="btn-primary"])) { color: var(--text-strong) }
+[data-theme="light"] .text-slate-200:not(:is([class*=" bg-emerald-"], [class^="bg-emerald-"], [class*=" bg-indigo-"], [class^="bg-indigo-"], [class*=" bg-purple-"], [class^="bg-purple-"], [class*=" bg-rose-"], [class^="bg-rose-"], [class*=" bg-amber-"], [class^="bg-amber-"], [class*=" bg-sky-"], [class^="bg-sky-"], [class*=" bg-cyan-"], [class^="bg-cyan-"], [class*=" bg-blue-"], [class^="bg-blue-"], [class*=" bg-red-"], [class^="bg-red-"], [class*=" bg-violet-"], [class^="bg-violet-"], [class*=" bg-green-"], [class^="bg-green-"], [class*=" bg-orange-"], [class^="bg-orange-"], [class*=" bg-fuchsia-"], [class^="bg-fuchsia-"], [class*=" bg-teal-"], [class^="bg-teal-"], [class*=" bg-pink-"], [class^="bg-pink-"], [class*=" from-"], [class*=" bg-gradient"], .bg-active, [class*="btn-primary"])) { color: var(--text) }
+[data-theme="light"] .text-slate-300 { color: var(--text-soft) }
+[data-theme="light"] .text-slate-400 { color: var(--text-muted) }
+[data-theme="light"] .text-slate-500 { color: var(--text-faint) }
+[data-theme="light"] .text-slate-600 { color: var(--text-muted) }
+[data-theme="light"] .text-slate-700 { color: var(--text-soft) }
+[data-theme="light"] .text-slate-800 { color: var(--text) }
+[data-theme="light"] .text-slate-900 { color: var(--text-strong) }
+[data-theme="light"] .text-gray-950 { color: var(--text-strong) }
+[data-theme="light"] .text-gray-900 { color: var(--text-strong) }
+[data-theme="light"] .text-gray-800 { color: var(--text-muted) }
+[data-theme="light"] .text-gray-700 { color: var(--text-muted) }
+[data-theme="light"] .text-gray-600 { color: var(--text-faint) }
+[data-theme="light"] .text-sky-950 { color: var(--text-strong) }
+[data-theme="light"] .hover\:text-white:hover:not(:is([class*=" bg-emerald-"], [class^="bg-emerald-"], [class*=" bg-indigo-"], [class^="bg-indigo-"], [class*=" bg-purple-"], [class^="bg-purple-"], [class*=" bg-rose-"], [class^="bg-rose-"], [class*=" bg-amber-"], [class^="bg-amber-"], [class*=" bg-sky-"], [class^="bg-sky-"], [class*=" bg-cyan-"], [class^="bg-cyan-"], [class*=" bg-blue-"], [class^="bg-blue-"], [class*=" bg-red-"], [class^="bg-red-"], [class*=" bg-violet-"], [class^="bg-violet-"], [class*=" bg-green-"], [class^="bg-green-"], [class*=" bg-orange-"], [class^="bg-orange-"], [class*=" bg-fuchsia-"], [class^="bg-fuchsia-"], [class*=" bg-teal-"], [class^="bg-teal-"], [class*=" bg-pink-"], [class^="bg-pink-"], [class*=" from-"], [class*=" bg-gradient"], .bg-active, [class*="btn-primary"])) { color: var(--text-strong) }
+[data-theme="light"] .hover\:text-slate-100:hover:not(:is([class*=" bg-emerald-"], [class^="bg-emerald-"], [class*=" bg-indigo-"], [class^="bg-indigo-"], [class*=" bg-purple-"], [class^="bg-purple-"], [class*=" bg-rose-"], [class^="bg-rose-"], [class*=" bg-amber-"], [class^="bg-amber-"], [class*=" bg-sky-"], [class^="bg-sky-"], [class*=" bg-cyan-"], [class^="bg-cyan-"], [class*=" bg-blue-"], [class^="bg-blue-"], [class*=" bg-red-"], [class^="bg-red-"], [class*=" bg-violet-"], [class^="bg-violet-"], [class*=" bg-green-"], [class^="bg-green-"], [class*=" bg-orange-"], [class^="bg-orange-"], [class*=" bg-fuchsia-"], [class^="bg-fuchsia-"], [class*=" bg-teal-"], [class^="bg-teal-"], [class*=" bg-pink-"], [class^="bg-pink-"], [class*=" from-"], [class*=" bg-gradient"], .bg-active, [class*="btn-primary"])) { color: var(--text-strong) }
+[data-theme="light"] .hover\:text-slate-200:hover:not(:is([class*=" bg-emerald-"], [class^="bg-emerald-"], [class*=" bg-indigo-"], [class^="bg-indigo-"], [class*=" bg-purple-"], [class^="bg-purple-"], [class*=" bg-rose-"], [class^="bg-rose-"], [class*=" bg-amber-"], [class^="bg-amber-"], [class*=" bg-sky-"], [class^="bg-sky-"], [class*=" bg-cyan-"], [class^="bg-cyan-"], [class*=" bg-blue-"], [class^="bg-blue-"], [class*=" bg-red-"], [class^="bg-red-"], [class*=" bg-violet-"], [class^="bg-violet-"], [class*=" bg-green-"], [class^="bg-green-"], [class*=" bg-orange-"], [class^="bg-orange-"], [class*=" bg-fuchsia-"], [class^="bg-fuchsia-"], [class*=" bg-teal-"], [class^="bg-teal-"], [class*=" bg-pink-"], [class^="bg-pink-"], [class*=" from-"], [class*=" bg-gradient"], .bg-active, [class*="btn-primary"])) { color: var(--text) }
+[data-theme="light"] .hover\:text-slate-300:hover:not(:is([class*=" bg-emerald-"], [class^="bg-emerald-"], [class*=" bg-indigo-"], [class^="bg-indigo-"], [class*=" bg-purple-"], [class^="bg-purple-"], [class*=" bg-rose-"], [class^="bg-rose-"], [class*=" bg-amber-"], [class^="bg-amber-"], [class*=" bg-sky-"], [class^="bg-sky-"], [class*=" bg-cyan-"], [class^="bg-cyan-"], [class*=" bg-blue-"], [class^="bg-blue-"], [class*=" bg-red-"], [class^="bg-red-"], [class*=" bg-violet-"], [class^="bg-violet-"], [class*=" bg-green-"], [class^="bg-green-"], [class*=" bg-orange-"], [class^="bg-orange-"], [class*=" bg-fuchsia-"], [class^="bg-fuchsia-"], [class*=" bg-teal-"], [class^="bg-teal-"], [class*=" bg-pink-"], [class^="bg-pink-"], [class*=" from-"], [class*=" bg-gradient"], .bg-active, [class*="btn-primary"])) { color: var(--text-soft) }
+[data-theme="light"] .hover\:text-slate-600:hover:not(:is([class*=" bg-emerald-"], [class^="bg-emerald-"], [class*=" bg-indigo-"], [class^="bg-indigo-"], [class*=" bg-purple-"], [class^="bg-purple-"], [class*=" bg-rose-"], [class^="bg-rose-"], [class*=" bg-amber-"], [class^="bg-amber-"], [class*=" bg-sky-"], [class^="bg-sky-"], [class*=" bg-cyan-"], [class^="bg-cyan-"], [class*=" bg-blue-"], [class^="bg-blue-"], [class*=" bg-red-"], [class^="bg-red-"], [class*=" bg-violet-"], [class^="bg-violet-"], [class*=" bg-green-"], [class^="bg-green-"], [class*=" bg-orange-"], [class^="bg-orange-"], [class*=" bg-fuchsia-"], [class^="bg-fuchsia-"], [class*=" bg-teal-"], [class^="bg-teal-"], [class*=" bg-pink-"], [class^="bg-pink-"], [class*=" from-"], [class*=" bg-gradient"], .bg-active, [class*="btn-primary"])) { color: var(--text-muted) }
+[data-theme="light"] .hover\:text-slate-700:hover:not(:is([class*=" bg-emerald-"], [class^="bg-emerald-"], [class*=" bg-indigo-"], [class^="bg-indigo-"], [class*=" bg-purple-"], [class^="bg-purple-"], [class*=" bg-rose-"], [class^="bg-rose-"], [class*=" bg-amber-"], [class^="bg-amber-"], [class*=" bg-sky-"], [class^="bg-sky-"], [class*=" bg-cyan-"], [class^="bg-cyan-"], [class*=" bg-blue-"], [class^="bg-blue-"], [class*=" bg-red-"], [class^="bg-red-"], [class*=" bg-violet-"], [class^="bg-violet-"], [class*=" bg-green-"], [class^="bg-green-"], [class*=" bg-orange-"], [class^="bg-orange-"], [class*=" bg-fuchsia-"], [class^="bg-fuchsia-"], [class*=" bg-teal-"], [class^="bg-teal-"], [class*=" bg-pink-"], [class^="bg-pink-"], [class*=" from-"], [class*=" bg-gradient"], .bg-active, [class*="btn-primary"])) { color: var(--text-soft) }
+[data-theme="light"] .text-emerald-200 { color: var(--success-fg) }
+[data-theme="light"] .hover\:text-emerald-200:hover { color: var(--success-fg) }
+[data-theme="light"] .text-emerald-300 { color: var(--success-fg) }
+[data-theme="light"] .hover\:text-emerald-300:hover { color: var(--success-fg) }
+[data-theme="light"] .text-emerald-400 { color: var(--success-fg) }
+[data-theme="light"] .hover\:text-emerald-400:hover { color: var(--success-fg) }
+[data-theme="light"] .text-amber-100 { color: var(--warning-fg) }
+[data-theme="light"] .hover\:text-amber-100:hover { color: var(--warning-fg) }
+[data-theme="light"] .text-amber-200 { color: var(--warning-fg) }
+[data-theme="light"] .hover\:text-amber-200:hover { color: var(--warning-fg) }
+[data-theme="light"] .text-amber-300 { color: var(--warning-fg) }
+[data-theme="light"] .hover\:text-amber-300:hover { color: var(--warning-fg) }
+[data-theme="light"] .text-amber-400 { color: var(--warning-fg) }
+[data-theme="light"] .hover\:text-amber-400:hover { color: var(--warning-fg) }
+[data-theme="light"] .text-rose-100 { color: var(--danger-fg) }
+[data-theme="light"] .hover\:text-rose-100:hover { color: var(--danger-fg) }
+[data-theme="light"] .text-rose-200 { color: var(--danger-fg) }
+[data-theme="light"] .hover\:text-rose-200:hover { color: var(--danger-fg) }
+[data-theme="light"] .text-rose-300 { color: var(--danger-fg) }
+[data-theme="light"] .hover\:text-rose-300:hover { color: var(--danger-fg) }
+[data-theme="light"] .text-rose-400 { color: var(--danger-fg) }
+[data-theme="light"] .hover\:text-rose-400:hover { color: var(--danger-fg) }
+[data-theme="light"] .text-red-200 { color: var(--danger-fg) }
+[data-theme="light"] .hover\:text-red-200:hover { color: var(--danger-fg) }
+[data-theme="light"] .text-red-300 { color: var(--danger-fg) }
+[data-theme="light"] .hover\:text-red-300:hover { color: var(--danger-fg) }
+[data-theme="light"] .text-red-400 { color: var(--danger-fg) }
+[data-theme="light"] .hover\:text-red-400:hover { color: var(--danger-fg) }
+[data-theme="light"] .text-indigo-200 { color: var(--info-fg) }
+[data-theme="light"] .hover\:text-indigo-200:hover { color: var(--info-fg) }
+[data-theme="light"] .text-indigo-300 { color: var(--info-fg) }
+[data-theme="light"] .hover\:text-indigo-300:hover { color: var(--info-fg) }
+[data-theme="light"] .text-indigo-400 { color: var(--info-fg) }
+[data-theme="light"] .hover\:text-indigo-400:hover { color: var(--info-fg) }
+[data-theme="light"] .text-violet-300 { color: var(--info-fg) }
+[data-theme="light"] .hover\:text-violet-300:hover { color: var(--info-fg) }
+[data-theme="light"] .text-violet-400 { color: var(--info-fg) }
+[data-theme="light"] .hover\:text-violet-400:hover { color: var(--info-fg) }
+[data-theme="light"] .text-cyan-300 { color: var(--cyan-fg) }
+[data-theme="light"] .hover\:text-cyan-300:hover { color: var(--cyan-fg) }
+[data-theme="light"] .text-cyan-400 { color: var(--cyan-fg) }
+[data-theme="light"] .hover\:text-cyan-400:hover { color: var(--cyan-fg) }
+[data-theme="light"] .text-purple-300 { color: var(--purple-fg) }
+[data-theme="light"] .hover\:text-purple-300:hover { color: var(--purple-fg) }
+[data-theme="light"] .text-purple-400 { color: var(--purple-fg) }
+[data-theme="light"] .hover\:text-purple-400:hover { color: var(--purple-fg) }
+[data-theme="light"] .text-sky-200 { color: var(--sky-fg) }
+[data-theme="light"] .hover\:text-sky-200:hover { color: var(--sky-fg) }
+[data-theme="light"] .text-sky-300 { color: var(--sky-fg) }
+[data-theme="light"] .hover\:text-sky-300:hover { color: var(--sky-fg) }
+[data-theme="light"] .text-sky-400 { color: var(--sky-fg) }
+[data-theme="light"] .hover\:text-sky-400:hover { color: var(--sky-fg) }
+[data-theme="light"] .text-indigo-800 { color: var(--info-fg) }
+[data-theme="light"] .placeholder\:text-slate-500::placeholder { color: var(--text-faint); opacity: .85 }
+[data-theme="light"] .placeholder\:text-slate-600::placeholder { color: var(--text-faint); opacity: .85 }
+
+/* ---- generated: borders ---------------------------------------------- */
+[data-theme="light"] .border-slate-800 { border-color: var(--border) }
+[data-theme="light"] .border-slate-800\/30 { border-color: color-mix(in srgb, var(--border) 70%, transparent) }
+[data-theme="light"] .border-slate-800\/40 { border-color: color-mix(in srgb, var(--border) 70%, transparent) }
+[data-theme="light"] .border-slate-800\/50 { border-color: color-mix(in srgb, var(--border) 70%, transparent) }
+[data-theme="light"] .border-slate-800\/60 { border-color: color-mix(in srgb, var(--border) 70%, transparent) }
+[data-theme="light"] .border-slate-800\/70 { border-color: color-mix(in srgb, var(--border) 70%, transparent) }
+[data-theme="light"] .border-slate-800\/80 { border-color: color-mix(in srgb, var(--border) 80%, transparent) }
+[data-theme="light"] .hover\:border-slate-800:hover { border-color: var(--border-strong) }
+[data-theme="light"] .divide-slate-800 > :not(:last-child) { border-color: var(--border) }
+[data-theme="light"] .divide-slate-800\/30 > :not(:last-child) { border-color: color-mix(in srgb, var(--border) 70%, transparent) }
+[data-theme="light"] .divide-slate-800\/40 > :not(:last-child) { border-color: color-mix(in srgb, var(--border) 70%, transparent) }
+[data-theme="light"] .divide-slate-800\/50 > :not(:last-child) { border-color: color-mix(in srgb, var(--border) 70%, transparent) }
+[data-theme="light"] .divide-slate-800\/60 > :not(:last-child) { border-color: color-mix(in srgb, var(--border) 70%, transparent) }
+[data-theme="light"] .divide-slate-800\/70 > :not(:last-child) { border-color: color-mix(in srgb, var(--border) 70%, transparent) }
+[data-theme="light"] .divide-slate-800\/80 > :not(:last-child) { border-color: color-mix(in srgb, var(--border) 80%, transparent) }
+[data-theme="light"] .border-slate-700 { border-color: var(--border-strong) }
+[data-theme="light"] .border-slate-700\/30 { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .border-slate-700\/40 { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .border-slate-700\/50 { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .border-slate-700\/60 { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .border-slate-700\/70 { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .border-slate-700\/80 { border-color: color-mix(in srgb, var(--border-strong) 80%, transparent) }
+[data-theme="light"] .hover\:border-slate-700:hover { border-color: var(--border-strong) }
+[data-theme="light"] .divide-slate-700 > :not(:last-child) { border-color: var(--border-strong) }
+[data-theme="light"] .divide-slate-700\/30 > :not(:last-child) { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .divide-slate-700\/40 > :not(:last-child) { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .divide-slate-700\/50 > :not(:last-child) { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .divide-slate-700\/60 > :not(:last-child) { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .divide-slate-700\/70 > :not(:last-child) { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .divide-slate-700\/80 > :not(:last-child) { border-color: color-mix(in srgb, var(--border-strong) 80%, transparent) }
+[data-theme="light"] .border-slate-600 { border-color: var(--border-strong) }
+[data-theme="light"] .border-slate-600\/30 { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .border-slate-600\/40 { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .border-slate-600\/50 { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .border-slate-600\/60 { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .border-slate-600\/70 { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .border-slate-600\/80 { border-color: color-mix(in srgb, var(--border-strong) 80%, transparent) }
+[data-theme="light"] .hover\:border-slate-600:hover { border-color: var(--border-strong) }
+[data-theme="light"] .divide-slate-600 > :not(:last-child) { border-color: var(--border-strong) }
+[data-theme="light"] .divide-slate-600\/30 > :not(:last-child) { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .divide-slate-600\/40 > :not(:last-child) { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .divide-slate-600\/50 > :not(:last-child) { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .divide-slate-600\/60 > :not(:last-child) { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .divide-slate-600\/70 > :not(:last-child) { border-color: color-mix(in srgb, var(--border-strong) 70%, transparent) }
+[data-theme="light"] .divide-slate-600\/80 > :not(:last-child) { border-color: color-mix(in srgb, var(--border-strong) 80%, transparent) }
+[data-theme="light"] .ring-offset-slate-900 { --tw-ring-offset-color: var(--surface) }
+
+/* ---- overlays, dialogs, shadows --------------------------------------- */
+[data-theme="light"] .fixed.inset-0[class*="bg-slate-950/"] { background: var(--scrim); }
+[data-theme="light"] [role="dialog"] { box-shadow: var(--shadow-pop); }
+[data-theme="light"] [role="dialog"][class*="bg-slate-900"] { background: var(--surface); }
+[data-theme="light"] [class*="shadow-black"] { --tw-shadow-color: var(--shadow-color); }

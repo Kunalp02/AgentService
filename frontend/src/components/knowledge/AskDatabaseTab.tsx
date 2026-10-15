@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import { Database, Terminal, Download, Save } from 'lucide-react';
 import { del, get, msg, post, withKb, fileHeaders } from '../../rag/apiClient';
@@ -590,3 +589,4 @@ export const AskDatabaseTab: React.FC = () => {
     </div>
   );
 };
+

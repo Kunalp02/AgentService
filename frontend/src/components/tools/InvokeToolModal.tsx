@@ -1,4 +1,3 @@
-
 import React, { useEffect, useMemo, useState } from 'react';
 import { Play, RotateCcw } from 'lucide-react';
 import { remoteToolsApi } from '../../api/remoteToolsApi';

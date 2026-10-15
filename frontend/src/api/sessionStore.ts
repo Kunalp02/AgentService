@@ -1,4 +1,3 @@
-
 import { store } from '../store';
 import { mergeGroupDirectory } from '../store/authSlice';
 import type { AuthUserSummary } from '../types/auth';
@@ -46,3 +45,4 @@ export const authSessionStore = {
     // No-op: authSlice.logout() clears everything (see PlatformContext.logout()).
   },
 };
+

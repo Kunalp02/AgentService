@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Code2, Server } from 'lucide-react';
 import { usePlatform } from '../../context/PlatformContext';

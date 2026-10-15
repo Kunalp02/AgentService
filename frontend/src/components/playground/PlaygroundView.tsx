@@ -1,12 +1,7 @@
-
 import React, { useState } from "react";
 import { AlertTriangle, Bot } from "lucide-react";
 import { usePlatform } from "../../context/PlatformContext";
-import {
-  executionApi,
-  ExecutionApiError,
-  formatExecutionTrace,
-} from "../../api/execution";
+import { executionApi } from "../../api/execution";
 
 export const PlaygroundView: React.FC = () => {
   const { agents, selectedPlaygroundAgentId, setSelectedPlaygroundAgentId } =
@@ -36,19 +31,12 @@ export const PlaygroundView: React.FC = () => {
         threadId || null,
       );
       setThreadId(result.threadId);
-      const trace = formatExecutionTrace(result.traces, result.llmCall);
-      const answer = result.error || result.output || "(no output)";
       setTurns((prev) => [
         ...prev,
-        { role: "agent", text: trace ? `${answer}\n\n${trace}` : answer },
+        { role: "agent", text: result.error || result.output || "(no output)" },
       ]);
     } catch (err) {
-      const trace =
-        err instanceof ExecutionApiError
-          ? formatExecutionTrace(err.traces, err.llmCall)
-          : "";
-      const message = err instanceof Error ? err.message : "Test run failed.";
-      setNotice(trace ? `${message}\n${trace}` : message);
+      setNotice(err instanceof Error ? err.message : "Test run failed.");
     } finally {
       setBusy(false);
     }
@@ -145,7 +133,7 @@ export const PlaygroundView: React.FC = () => {
       </form>
 
       {notice && (
-        <div className="p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-xs text-amber-200 whitespace-pre-wrap">
+        <div className="p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-xs text-amber-200">
           <AlertTriangle className="w-4 h-4 inline mr-2" />
           {notice}
         </div>
@@ -160,3 +148,4 @@ export const PlaygroundView: React.FC = () => {
     </div>
   );
 };
+

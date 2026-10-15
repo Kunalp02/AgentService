@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import {
   Users,
@@ -631,3 +630,4 @@ export const UserManagementView: React.FC = () => {
     </div>
   );
 };
+

@@ -1,4 +1,3 @@
-
 import { authTokenStore } from "./authTokenStore";
 import { serviceUrl } from "../config/api";
 import { handleUnauthorized } from "./sessionGuard";
@@ -93,25 +92,9 @@ export interface ExecutionRequestInput {
 
 // ------------------------------------------------------------------ errors
 
-export interface ExecutionTrace {
-  step: string;
-  status: string;
-  detail?: string | null;
-  error?: string | null;
-}
-
-export interface LlmCallTrace {
-  status: string;
-  model?: string | null;
-  calls?: number;
-  failedStep?: string | null;
-}
-
 export class ExecutionApiError extends Error {
   status: number;
   code?: string;
-  traces?: ExecutionTrace[];
-  llmCall?: LlmCallTrace | null;
   constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = "ExecutionApiError";
@@ -320,10 +303,7 @@ async function executionFetch(path: string, init: RequestInit = {}) {
     if (r.status === 401) handleUnauthorized(sent);
   if (!r.ok) {
     const { message, code } = messageOf(r.status, data);
-    const error = new ExecutionApiError(message, r.status, code);
-    error.traces = asTraces(data?.traces);
-    error.llmCall = data?.llmCall ?? null;
-    throw error;
+    throw new ExecutionApiError(message, r.status, code);
   }
   return data;
 }
@@ -335,8 +315,6 @@ export interface TestRunResult {
   status: string;
   error: string;
   steps: string[];
-  traces: ExecutionTrace[];
-  llmCall?: LlmCallTrace | null;
   startedBy: string;
   clientIp: string;
 }
@@ -355,34 +333,6 @@ export interface ActivityRun {
   createdAt: string;
   steps: string[];
   executionType: string;
-}
-
-function asTraces(data: any): ExecutionTrace[] {
-  return asList(data)
-    .filter((item) => item && typeof item === "object" && item.step)
-    .map((item) => ({
-      step: String(item.step),
-      status: String(item.status || "ok"),
-      detail: item.detail ?? null,
-      error: item.error ?? null,
-    }));
-}
-
-export function formatExecutionTrace(
-  traces: ExecutionTrace[] | undefined,
-  llmCall?: LlmCallTrace | null,
-): string {
-  const lines: string[] = [];
-  if (llmCall?.status) {
-    const where = llmCall.failedStep ? ` at ${llmCall.failedStep}` : "";
-    lines.push(`LLM ${llmCall.status}${llmCall.model ? ` (${llmCall.model})` : ""}${where}`);
-  }
-  for (const trace of traces || []) {
-    const detail = trace.detail ? ` — ${trace.detail}` : "";
-    const error = trace.error ? ` — ${trace.error}` : "";
-    lines.push(`${trace.status} ${trace.step}${detail}${error}`);
-  }
-  return lines.join("\n");
 }
 
 function asList(data: any): any[] {
@@ -428,8 +378,6 @@ export const executionApi = {
       status: String(pick(run, "status") || "SUCCEEDED"),
       error: String(pick(run, "error") || ""),
       steps,
-      traces: asTraces(pick(run, "traces")),
-      llmCall: (pick(run, "llmCall", "llm_call") as LlmCallTrace) || null,
       startedBy: String(pick(run, "startedBy", "started_by") || ""),
       clientIp: String(pick(run, "clientIp", "client_ip") || ""),
     };
@@ -516,8 +464,6 @@ export interface AuditRunDetail extends AuditRunItem {
   input: string;
   output?: string | null;
   steps: string[];
-  traces?: ExecutionTrace[];
-  llmCall?: LlmCallTrace | null;
   retrievedContext: any[];
   toolCalls: any[];
   manifestHash: string;
@@ -555,3 +501,4 @@ export const auditApi = {
       `/api/v1/agents/${encodeURIComponent(agentId)}/audit/runs/${encodeURIComponent(runId)}`,
     ) as Promise<AuditRunDetail>,
 };
+

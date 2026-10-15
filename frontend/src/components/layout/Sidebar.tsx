@@ -1,4 +1,3 @@
-
 import React from 'react';
 import {
   LayoutDashboard,
@@ -14,7 +13,7 @@ import {
   FolderGit2,
   Lock,
   Boxes,
-  GitBranch
+  Workflow
 } from 'lucide-react';
 import { usePlatform } from '../../context/PlatformContext';
 import { RolePermissionKey } from '../../types';
@@ -114,15 +113,15 @@ export const Sidebar: React.FC = () => {
           badgeColor: 'bg-purple-500/20 text-purple-300',
         },
         {
-          id: 'workflows',
-          label: 'Workflows',
-          icon: GitBranch,
-          permission: PERMISSIONS.Agent.View,
-        },
-        {
           id: 'playground',
           label: 'Playground & Sandbox',
           icon: Terminal,
+        },
+        {
+          id: 'workflow',
+          label: 'Workflows',
+          icon: Workflow,
+          permission: PERMISSIONS.Agent.View
         },
       ],
     },
@@ -172,7 +171,7 @@ export const Sidebar: React.FC = () => {
 
       {/* Role Profile summary in sidebar footer */}
       <div className="p-3">
-        <div className={`px-2 py-2 rounded-lg bg-slate-850/60 border flex items-center justify-between ${theme === 'light' ? 'border-slate-400/40' : 'border-slate-300/20'}`}>
+        <div className="px-2 py-2 rounded-lg bg-surface-2 border border-line flex items-center justify-between">
           <div className="min-w-0">
             <div className={`text-[10px] font-medium ${theme === 'light' ? 'text-slate-600' : 'text-slate-300'}`}>Active Policy Profile</div>
             <div className={`text-xs font-bold truncate ${theme === 'light' ? 'text-slate-800' : 'text-slate-200'}`}>{currentRole?.name || 'Standard User'}</div>
@@ -188,3 +187,4 @@ export const Sidebar: React.FC = () => {
     </aside>
   );
 };
+
