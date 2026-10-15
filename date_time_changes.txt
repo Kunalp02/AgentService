@@ -2,14 +2,20 @@ DATE: 2026-10-15
 
 Replace each file below with the complete contents. Paths are from the repository root.
 New files: create the path, then paste the contents.
-This dump is everything changed after the earlier workflow dump (commit a495e2c).
-It includes the current frontend and the retrieved-knowledge prompt fix.
+This file contains the workflow backend, the workflow API client, the current frontend, and the retrieved-knowledge prompt fix.
 Delete the file listed under DELETED. Do not keep both workflow pages.
 
 DELETED:
 - frontend/src/components/workflows/WorkflowView.tsx
 
 NEW FILES:
+- frontend/src/api/workflows.ts
+- execution-service/src/agent_execution/schemas/workflows.py
+- execution-service/src/agent_execution/services/workflow_engine.py
+- execution-service/src/agent_execution/services/workflow_service.py
+- execution-service/src/agent_execution/infrastructure/persistence/workflow_repository.py
+- execution-service/src/agent_execution/api/controllers/workflow_controller.py
+- execution-service/tests/test_workflow_engine.py
 - frontend/src/components/layout/ThemeToggle.tsx
 - frontend/src/components/tools/LocalToolTestModal.tsx
 - frontend/src/components/workflow/WorkflowNode.tsx
@@ -20,6 +26,2124 @@ NEW FILES:
 - frontend/src/styles/theme-components.css
 - frontend/src/styles/theme-palettes.css
 - frontend/src/styles/theme.css
+Workflow backend and the workflow API client are included below, then the frontend and the retrieved-knowledge prompt fix.
+frontend/src/api/workflows.ts is required for the canvas Save, Publish, and Test run buttons.
+If @xyflow/react is not installed, run npm install inside the frontend folder.
+
+====================================================================================================
+FILE: execution-service/src/agent_execution/schemas/workflows.py
+====================================================================================================
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class WorkflowNode(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    type: Literal["start", "agent", "condition", "end"]
+    agent_id: UUID | None = Field(default=None, alias="agentId")
+    input: str = "{{input}}"
+    output: str = ""
+    on: str = ""
+    position: dict[str, float] | None = None
+
+
+class WorkflowEdge(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_node: str = Field(alias="from")
+    to_node: str = Field(alias="to")
+    when: str = ""
+    max_loops: int | None = Field(default=None, alias="maxLoops")
+
+
+class WorkflowDefinition(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    nodes: list[WorkflowNode] = Field(default_factory=list)
+    edges: list[WorkflowEdge] = Field(default_factory=list)
+    max_steps: int = Field(default=30, alias="maxSteps")
+
+
+class WorkflowUpsert(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str
+    definition: WorkflowDefinition
+
+
+class WorkflowSummary(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_id: UUID = Field(alias="workflowId")
+    name: str
+    status: str
+    updated_at: datetime = Field(alias="updatedAt")
+
+
+class WorkflowDocument(WorkflowSummary):
+    definition: WorkflowDefinition
+    created_at: datetime = Field(alias="createdAt")
+
+
+class WorkflowRunRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    input: str
+    session_id: str | None = Field(default=None, alias="sessionId")
+    user_id: str | None = Field(default=None, alias="userId")
+    org_id: str | None = Field(default=None, alias="orgId")
+
+
+class WorkflowStepTrace(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    node_id: str = Field(alias="nodeId")
+    type: str
+    agent_id: UUID | None = Field(default=None, alias="agentId")
+    status: str
+    input: str = ""
+    output: str = ""
+    output_key: str = Field(default="", alias="outputKey")
+    error: str = ""
+
+
+class WorkflowRunResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_run_id: UUID = Field(alias="workflowRunId")
+    workflow_id: UUID = Field(alias="workflowId")
+    status: str
+    output: str = ""
+    error: str = ""
+    session_id: str = Field(alias="sessionId")
+    user_id: str = Field(alias="userId")
+    steps: list[WorkflowStepTrace] = Field(default_factory=list)
+    state: dict[str, Any] = Field(default_factory=dict)
+
+====================================================================================================
+FILE: execution-service/src/agent_execution/services/workflow_engine.py
+====================================================================================================
+
+from __future__ import annotations
+
+import re
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from uuid import UUID
+
+from agent_execution.core.exceptions import ServiceError
+from agent_execution.schemas.workflows import (
+    WorkflowDefinition,
+    WorkflowEdge,
+    WorkflowNode,
+    WorkflowStepTrace,
+)
+
+
+class WorkflowRunError(ServiceError):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        status_code: int,
+        steps: list[WorkflowStepTrace],
+        state: dict[str, str],
+    ) -> None:
+        super().__init__(code, message, status_code)
+        self.steps = steps
+        self.state = state
+
+_TOKEN = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
+_OTHERWISE = {"otherwise", "else", "default"}
+
+
+@dataclass
+class WorkflowOutcome:
+    output: str
+    steps: list[WorkflowStepTrace] = field(default_factory=list)
+    state: dict[str, str] = field(default_factory=dict)
+
+
+def render_template(template: str, state: dict[str, str]) -> str:
+    def replace(match: re.Match[str]) -> str:
+        return state.get(match.group(1), "")
+
+    return _TOKEN.sub(replace, template or "")
+
+
+def validate_definition(definition: WorkflowDefinition, *, for_run: bool) -> None:
+    nodes = definition.nodes
+    if not nodes:
+        raise ServiceError("WORKFLOW_INVALID", "Add at least a start and an end.", 400)
+    ids = [node.id for node in nodes]
+    if len(ids) != len(set(ids)):
+        raise ServiceError("WORKFLOW_INVALID", "Each node needs its own id.", 400)
+    starts = [node for node in nodes if node.type == "start"]
+    ends = [node for node in nodes if node.type == "end"]
+    if len(starts) != 1 or len(ends) < 1:
+        raise ServiceError(
+            "WORKFLOW_INVALID", "A workflow needs one Start and at least one End.", 400
+        )
+    known = set(ids)
+    for edge in definition.edges:
+        if edge.from_node not in known or edge.to_node not in known:
+            raise ServiceError(
+                "WORKFLOW_INVALID", "A line points at a node that is not on the canvas.", 400
+            )
+    if not for_run:
+        return
+    for node in nodes:
+        if node.type == "agent" and node.agent_id is None:
+            raise ServiceError(
+                "WORKFLOW_INVALID",
+                f"Agent node '{node.id}' has no published agent selected.",
+                400,
+            )
+        if node.type == "condition" and not node.on.strip():
+            raise ServiceError(
+                "WORKFLOW_INVALID",
+                f"Condition '{node.id}' must name the output it reads.",
+                400,
+            )
+
+
+def _outgoing(definition: WorkflowDefinition, node_id: str) -> list[WorkflowEdge]:
+    return [edge for edge in definition.edges if edge.from_node == node_id]
+
+
+def _single_edge(definition: WorkflowDefinition, node_id: str) -> WorkflowEdge:
+    edges = _outgoing(definition, node_id)
+    if len(edges) != 1:
+        raise ServiceError(
+            "WORKFLOW_INVALID",
+            f"Node '{node_id}' must have exactly one next line.",
+            400,
+        )
+    return edges[0]
+
+
+def _matches(when: str, value: str) -> bool:
+    text = when.strip()
+    lowered = text.lower()
+    if lowered.startswith("contains "):
+        needle = text.split(" ", 1)[1].strip().lower()
+        return needle in value.lower()
+    return lowered in value.lower()
+
+
+def _pick_condition(node: WorkflowNode, edges: list[WorkflowEdge], state: dict[str, str]) -> WorkflowEdge:
+    value = state.get(node.on.strip(), "")
+    specific = [edge for edge in edges if edge.when.strip().lower() not in _OTHERWISE and edge.when.strip()]
+    fallback = [edge for edge in edges if not edge.when.strip() or edge.when.strip().lower() in _OTHERWISE]
+    for edge in specific:
+        if _matches(edge.when, value):
+            return edge
+    if fallback:
+        return fallback[0]
+    raise ServiceError(
+        "WORKFLOW_INVALID",
+        f"Condition '{node.id}' has no matching line for this result.",
+        400,
+    )
+
+
+async def execute_workflow(
+    definition: WorkflowDefinition,
+    user_input: str,
+    run_agent: Callable[[UUID, str], Awaitable[str]],
+) -> WorkflowOutcome:
+    validate_definition(definition, for_run=True)
+    nodes = {node.id: node for node in definition.nodes}
+    state: dict[str, str] = {"input": user_input}
+    steps: list[WorkflowStepTrace] = []
+    loops: dict[tuple[str, str], int] = {}
+    last_key = "input"
+    current = _single_edge(definition, next(node.id for node in definition.nodes if node.type == "start")).to_node
+
+    for _ in range(max(1, definition.max_steps)):
+        node = nodes.get(current)
+        if node is None:
+            raise ServiceError("WORKFLOW_INVALID", f"Missing node '{current}'.", 400)
+        if node.type == "end":
+            return WorkflowOutcome(output=state.get(last_key, ""), steps=steps, state=state)
+        if node.type == "agent":
+            assert node.agent_id is not None
+            text = render_template(node.input or "{{input}}", state)
+            try:
+                output = await run_agent(node.agent_id, text)
+            except ServiceError as exc:
+                steps.append(
+                    WorkflowStepTrace(
+                        node_id=node.id,
+                        type="agent",
+                        agent_id=node.agent_id,
+                        status="failed",
+                        input=text,
+                        error=exc.message,
+                    )
+                )
+                raise WorkflowRunError(
+                    exc.code,
+                    f"Agent node '{node.id}' failed: {exc.message}",
+                    exc.status_code,
+                    steps,
+                    state,
+                ) from exc
+            key = (node.output or "output").strip() or "output"
+            state[key] = output
+            last_key = key
+            steps.append(
+                WorkflowStepTrace(
+                    node_id=node.id,
+                    type="agent",
+                    agent_id=node.agent_id,
+                    status="succeeded",
+                    input=text,
+                    output=output,
+                    output_key=key,
+                )
+            )
+            current = _single_edge(definition, node.id).to_node
+            continue
+        if node.type == "condition":
+            edge = _pick_condition(node, _outgoing(definition, node.id), state)
+            loop_key = (node.id, edge.to_node)
+            loops[loop_key] = loops.get(loop_key, 0) + 1
+            if edge.max_loops is not None and loops[loop_key] > edge.max_loops:
+                raise WorkflowRunError(
+                    "WORKFLOW_LIMIT",
+                    f"Condition '{node.id}' reached its loop limit of {edge.max_loops}.",
+                    400,
+                    steps,
+                    state,
+                )
+            steps.append(
+                WorkflowStepTrace(
+                    node_id=node.id,
+                    type="condition",
+                    status="succeeded",
+                    input=state.get(node.on.strip(), ""),
+                    output=edge.when or "otherwise",
+                )
+            )
+            current = edge.to_node
+            continue
+        raise ServiceError("WORKFLOW_INVALID", f"Node '{node.id}' cannot run.", 400)
+
+    raise ServiceError(
+        "WORKFLOW_LIMIT",
+        "The workflow reached the maximum number of steps.",
+        400,
+    )
+
+====================================================================================================
+FILE: execution-service/src/agent_execution/services/workflow_service.py
+====================================================================================================
+
+from __future__ import annotations
+
+import json
+from uuid import UUID, uuid4
+
+from agent_execution.core.exceptions import ServiceError
+from agent_execution.infrastructure.persistence.workflow_repository import WorkflowRepository
+from agent_execution.schemas.runs import CreateRunRequest
+from agent_execution.schemas.threads import Channel, CreateThreadRequest, ExecutionType
+from agent_execution.schemas.workflows import (
+    WorkflowDefinition,
+    WorkflowDocument,
+    WorkflowRunRequest,
+    WorkflowRunResponse,
+    WorkflowSummary,
+    WorkflowUpsert,
+)
+from agent_execution.services.agent_execution_service import AgentExecutionService
+from agent_execution.services.thread_service import ThreadService
+from agent_execution.services.workflow_engine import (
+    WorkflowRunError,
+    execute_workflow,
+    validate_definition,
+)
+
+
+class WorkflowService:
+    def __init__(
+        self,
+        repository: WorkflowRepository,
+        threads: ThreadService,
+        execution: AgentExecutionService,
+    ) -> None:
+        self._repository = repository
+        self._threads = threads
+        self._execution = execution
+
+    async def create(self, body: WorkflowUpsert) -> WorkflowDocument:
+        name = body.name.strip()
+        if not name:
+            raise ServiceError("WORKFLOW_INVALID", "Give the workflow a name.", 400)
+        validate_definition(body.definition, for_run=False)
+        workflow_id = uuid4()
+        await self._repository.insert(workflow_id, name, "Draft", body.definition)
+        row = await self._repository.get(workflow_id)
+        return _document(row)
+
+    async def _require(self, workflow_id: UUID):
+        return _require_row(await self._repository.get(workflow_id))
+
+    async def update(self, workflow_id: UUID, body: WorkflowUpsert) -> WorkflowDocument:
+        row = await self._require(workflow_id)
+        name = body.name.strip()
+        if not name:
+            raise ServiceError("WORKFLOW_INVALID", "Give the workflow a name.", 400)
+        validate_definition(body.definition, for_run=False)
+        await self._repository.update(workflow_id, name, body.definition)
+        if row["status"] == "Published":
+            await self._repository.set_status(workflow_id, "Draft")
+        return _document(await self._repository.get(workflow_id))
+
+    async def publish(self, workflow_id: UUID, publish: bool) -> WorkflowDocument:
+        row = await self._require(workflow_id)
+        if publish:
+            validate_definition(_definition(row), for_run=True)
+            await self._repository.set_status(workflow_id, "Published")
+        else:
+            await self._repository.set_status(workflow_id, "Draft")
+        return _document(await self._repository.get(workflow_id))
+
+    async def get(self, workflow_id: UUID) -> WorkflowDocument:
+        return _document(await self._require(workflow_id))
+
+    async def list_workflows(self) -> list[WorkflowSummary]:
+        rows = await self._repository.list_all()
+        return [
+            WorkflowSummary(
+                workflow_id=row["workflow_id"],
+                name=row["name"],
+                status=row["status"],
+                updated_at=row["updated_at"],
+            )
+            for row in rows
+        ]
+
+    async def run(
+        self,
+        workflow_id: UUID,
+        body: WorkflowRunRequest,
+        bearer_token: str | None,
+        triggered_by: str,
+    ) -> WorkflowRunResponse:
+        row = await self._require(workflow_id)
+        if row["status"] != "Published":
+            raise ServiceError(
+                "WORKFLOW_NOT_PUBLISHED",
+                "Publish the workflow before running it.",
+                409,
+            )
+        definition = _definition(row)
+        session_id = (body.session_id or body.user_id or "").strip() or str(uuid4())
+        user_id = (body.user_id or triggered_by or "").strip()
+        run_id = uuid4()
+        await self._repository.insert_run(
+            workflow_run_id=run_id,
+            workflow_id=workflow_id,
+            status="RUNNING",
+            user_input=body.input,
+            session_id=session_id,
+            user_id=user_id,
+            org_id=body.org_id,
+        )
+
+        async def run_agent(agent_id: UUID, text: str) -> str:
+            thread = await self._threads.create(
+                agent_id,
+                CreateThreadRequest(execution_type=ExecutionType.PRODUCTION),
+                channel=Channel.API,
+                bearer_token=bearer_token,
+                triggered_by=user_id or "workflow",
+            )
+            result = await self._execution.start(
+                agent_id,
+                thread.thread_id,
+                CreateRunRequest(
+                    input=text,
+                    org_id=body.org_id,
+                    session_id=session_id,
+                ),
+                bearer_token,
+            )
+            return result.output or ""
+
+        try:
+            outcome = await execute_workflow(definition, body.input, run_agent)
+        except WorkflowRunError as exc:
+            await self._repository.finish_run(
+                run_id,
+                status="FAILED",
+                output="",
+                error=exc.message,
+                steps=exc.steps,
+                state=exc.state,
+            )
+            raise
+        except ServiceError as exc:
+            await self._repository.finish_run(
+                run_id,
+                status="FAILED",
+                output="",
+                error=exc.message,
+                steps=[],
+                state={},
+            )
+            raise
+        await self._repository.finish_run(
+            run_id,
+            status="SUCCEEDED",
+            output=outcome.output,
+            error="",
+            steps=outcome.steps,
+            state=outcome.state,
+        )
+        return WorkflowRunResponse(
+            workflow_run_id=run_id,
+            workflow_id=workflow_id,
+            status="SUCCEEDED",
+            output=outcome.output,
+            session_id=session_id,
+            user_id=user_id,
+            steps=outcome.steps,
+            state=outcome.state,
+        )
+
+
+def _require_row(row):
+    if row is None:
+        raise ServiceError("NOT_FOUND", "Workflow not found.", 404)
+    return row
+
+
+def _definition(row) -> WorkflowDefinition:
+    raw = row["definition"]
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    return WorkflowDefinition.model_validate(raw)
+
+
+def _document(row) -> WorkflowDocument:
+    row = _require_row(row)
+    return WorkflowDocument(
+        workflow_id=row["workflow_id"],
+        name=row["name"],
+        status=row["status"],
+        updated_at=row["updated_at"],
+        created_at=row["created_at"],
+        definition=_definition(row),
+    )
+
+====================================================================================================
+FILE: execution-service/src/agent_execution/infrastructure/persistence/workflow_repository.py
+====================================================================================================
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from uuid import UUID
+
+from agent_execution.infrastructure.persistence.database import Database
+from agent_execution.schemas.workflows import WorkflowDefinition
+
+
+class WorkflowRepository:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def insert(
+        self, workflow_id: UUID, name: str, status: str, definition: WorkflowDefinition
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO workflows (workflow_id, name, status, definition, created_at, updated_at)
+                VALUES ($1, $2, $3, $4::jsonb, $5, $5)
+                """,
+                workflow_id,
+                name,
+                status,
+                _dump(definition),
+                now,
+            )
+
+    async def update(
+        self, workflow_id: UUID, name: str, definition: WorkflowDefinition
+    ) -> None:
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE workflows
+                SET name = $2, definition = $3::jsonb, updated_at = $4
+                WHERE workflow_id = $1
+                """,
+                workflow_id,
+                name,
+                _dump(definition),
+                datetime.now(timezone.utc),
+            )
+
+    async def set_status(self, workflow_id: UUID, status: str) -> None:
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE workflows SET status = $2, updated_at = $3 WHERE workflow_id = $1
+                """,
+                workflow_id,
+                status,
+                datetime.now(timezone.utc),
+            )
+
+    async def get(self, workflow_id: UUID):
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            return await conn.fetchrow(
+                "SELECT * FROM workflows WHERE workflow_id = $1",
+                workflow_id,
+            )
+
+    async def list_all(self):
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            return await conn.fetch(
+                "SELECT workflow_id, name, status, updated_at FROM workflows ORDER BY updated_at DESC"
+            )
+
+    async def insert_run(
+        self,
+        *,
+        workflow_run_id: UUID,
+        workflow_id: UUID,
+        status: str,
+        user_input: str,
+        session_id: str,
+        user_id: str,
+        org_id: str | None,
+    ) -> None:
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO workflow_runs (
+                    workflow_run_id, workflow_id, status, input, session_id, user_id, org_id
+                ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+                """,
+                workflow_run_id,
+                workflow_id,
+                status,
+                user_input,
+                session_id,
+                user_id,
+                org_id,
+            )
+
+    async def finish_run(
+        self,
+        workflow_run_id: UUID,
+        *,
+        status: str,
+        output: str,
+        error: str,
+        steps: list,
+        state: dict,
+    ) -> None:
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE workflow_runs
+                SET status = $2, output = $3, error = $4, steps = $5::jsonb,
+                    state = $6::jsonb, completed_at = $7
+                WHERE workflow_run_id = $1
+                """,
+                workflow_run_id,
+                status,
+                output,
+                error,
+                json.dumps([step.model_dump(mode="json", by_alias=True) for step in steps]),
+                json.dumps(state),
+                datetime.now(timezone.utc),
+            )
+
+
+def _dump(definition: WorkflowDefinition) -> str:
+    return json.dumps(definition.model_dump(mode="json", by_alias=True))
+
+====================================================================================================
+FILE: execution-service/src/agent_execution/infrastructure/persistence/database.py
+====================================================================================================
+
+from __future__ import annotations
+
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
+
+SCHEMA = [
+    """
+    CREATE TABLE IF NOT EXISTS threads (
+        thread_id UUID PRIMARY KEY,
+        agent_id UUID NOT NULL,
+        channel VARCHAR(16) NOT NULL,
+        execution_type VARCHAR(32) NOT NULL,
+        status VARCHAR(32) NOT NULL,
+        revision_id UUID NULL,
+        manifest_hash TEXT NOT NULL DEFAULT '',
+        manifest_snapshot JSONB NULL,
+        deployment_id UUID NULL,
+        retention_policy VARCHAR(32) NOT NULL,
+        triggered_by TEXT NOT NULL DEFAULT '',
+        expires_at TIMESTAMPTZ NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        metadata JSONB NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_threads_agent_created
+        ON threads (agent_id, created_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_threads_expires
+        ON threads (expires_at) WHERE status = 'OPEN'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS runs (
+        run_id UUID PRIMARY KEY,
+        thread_id UUID NOT NULL,
+        agent_id UUID NOT NULL,
+        status VARCHAR(32) NOT NULL,
+        dispatch VARCHAR(16) NOT NULL,
+        input TEXT NOT NULL,
+        output TEXT NULL,
+        error TEXT NULL,
+        revision_id UUID NULL,
+        manifest_hash TEXT NOT NULL DEFAULT '',
+        attempt INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 3,
+        worker_id TEXT NULL,
+        lease_expires_at TIMESTAMPTZ NULL,
+        idempotency_key TEXT NULL,
+        input_artifact_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        output_artifact_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+        retrieved_context JSONB NOT NULL DEFAULT '[]'::jsonb,
+        stop_reason TEXT NULL,
+        org_id TEXT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        started_at TIMESTAMPTZ NULL,
+        completed_at TIMESTAMPTZ NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_runs_thread_created
+        ON runs (thread_id, created_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_runs_claim ON runs (status, created_at)
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_runs_idempotency
+        ON runs (thread_id, idempotency_key)
+        WHERE idempotency_key IS NOT NULL
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS deployments (
+        deployment_id UUID PRIMARY KEY,
+        agent_id UUID NOT NULL,
+        slug TEXT NOT NULL UNIQUE,
+        revision_id UUID NULL,
+        api_key_hash TEXT NOT NULL UNIQUE,
+        retention_policy VARCHAR(32) NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS conversation_histories (
+        agent_id UUID NOT NULL,
+        session_id TEXT NOT NULL DEFAULT '',
+        org_id TEXT NOT NULL DEFAULT '',
+        turns JSONB NOT NULL DEFAULT '[]'::jsonb,
+        version INTEGER NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        execution_id UUID NULL,
+        PRIMARY KEY (agent_id, session_id, org_id)
+    )
+    """,
+    """
+    ALTER TABLE conversation_histories
+        ADD COLUMN IF NOT EXISTS execution_id UUID NULL
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_conversation_execution
+        ON conversation_histories (agent_id, execution_id)
+    """,
+    """
+    ALTER TABLE runs ADD COLUMN IF NOT EXISTS tool_calls JSONB NOT NULL DEFAULT '[]'::jsonb
+    """,
+    """
+    ALTER TABLE deployments ADD COLUMN IF NOT EXISTS api_key_enc TEXT NULL
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS workflows (
+        workflow_id UUID PRIMARY KEY,
+        name TEXT NOT NULL,
+        status VARCHAR(32) NOT NULL,
+        definition JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS workflow_runs (
+        workflow_run_id UUID PRIMARY KEY,
+        workflow_id UUID NOT NULL,
+        status VARCHAR(32) NOT NULL,
+        input TEXT NOT NULL,
+        output TEXT NULL,
+        error TEXT NULL,
+        session_id TEXT NOT NULL DEFAULT '',
+        user_id TEXT NOT NULL DEFAULT '',
+        org_id TEXT NULL,
+        steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+        state JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMPTZ NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_workflow_runs_workflow
+        ON workflow_runs (workflow_id, created_at DESC)
+    """,
+]
+
+
+class Database:
+    def __init__(self, database_url: str) -> None:
+        if not database_url:
+            raise RuntimeError("EXECUTION_DATABASE_URL is required.")
+        self._database_url = database_url
+        self._pool = None
+        self._lock = asyncio.Lock()
+
+    async def pool(self):
+        if self._pool is not None:
+            return self._pool
+        async with self._lock:
+            if self._pool is None:
+                import asyncpg
+
+                self._pool = await asyncpg.create_pool(
+                    self._database_url, min_size=1, max_size=10
+                )
+                async with self._pool.acquire() as conn:
+                    for statement in SCHEMA:
+                        await conn.execute(statement)
+                logger.info("Execution schema is ready")
+        return self._pool
+
+    async def ping(self) -> None:
+        pool = await self.pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+
+    async def aclose(self) -> None:
+        if self._pool is not None:
+            await self._pool.close()
+            self._pool = None
+
+====================================================================================================
+FILE: execution-service/src/agent_execution/api/controllers/workflow_controller.py
+====================================================================================================
+
+from __future__ import annotations
+
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, Depends
+
+from agent_execution.api.controller import ApiController
+from agent_execution.api.dependencies import (
+    get_bearer_token,
+    get_platform_principal,
+    get_workflow_service,
+)
+from agent_execution.schemas.workflows import (
+    WorkflowDocument,
+    WorkflowRunRequest,
+    WorkflowRunResponse,
+    WorkflowSummary,
+    WorkflowUpsert,
+)
+from agent_execution.services.workflow_service import WorkflowService
+from platform_auth import PlatformPrincipal
+
+
+class WorkflowController(ApiController):
+    def register(self, router: APIRouter) -> None:
+        router.post("/workflows", response_model=WorkflowDocument, tags=["workflows"])(self.create)
+        router.get("/workflows", response_model=list[WorkflowSummary], tags=["workflows"])(self.list_workflows)
+        router.get("/workflows/{workflow_id}", response_model=WorkflowDocument, tags=["workflows"])(self.get)
+        router.put("/workflows/{workflow_id}", response_model=WorkflowDocument, tags=["workflows"])(self.update)
+        router.post("/workflows/{workflow_id}/publish", response_model=WorkflowDocument, tags=["workflows"])(self.publish)
+        router.post("/workflows/{workflow_id}/unpublish", response_model=WorkflowDocument, tags=["workflows"])(self.unpublish)
+        router.post("/workflows/{workflow_id}/runs", response_model=WorkflowRunResponse, tags=["workflows"])(self.run)
+
+    async def create(
+        self,
+        body: WorkflowUpsert,
+        service: Annotated[WorkflowService, Depends(get_workflow_service)],
+        _: Annotated[str, Depends(get_bearer_token)],
+    ) -> WorkflowDocument:
+        return await service.create(body)
+
+    async def list_workflows(
+        self,
+        service: Annotated[WorkflowService, Depends(get_workflow_service)],
+        _: Annotated[str, Depends(get_bearer_token)],
+    ) -> list[WorkflowSummary]:
+        return await service.list_workflows()
+
+    async def get(
+        self,
+        workflow_id: UUID,
+        service: Annotated[WorkflowService, Depends(get_workflow_service)],
+        _: Annotated[str, Depends(get_bearer_token)],
+    ) -> WorkflowDocument:
+        return await service.get(workflow_id)
+
+    async def update(
+        self,
+        workflow_id: UUID,
+        body: WorkflowUpsert,
+        service: Annotated[WorkflowService, Depends(get_workflow_service)],
+        _: Annotated[str, Depends(get_bearer_token)],
+    ) -> WorkflowDocument:
+        return await service.update(workflow_id, body)
+
+    async def publish(
+        self,
+        workflow_id: UUID,
+        service: Annotated[WorkflowService, Depends(get_workflow_service)],
+        _: Annotated[str, Depends(get_bearer_token)],
+    ) -> WorkflowDocument:
+        return await service.publish(workflow_id, True)
+
+    async def unpublish(
+        self,
+        workflow_id: UUID,
+        service: Annotated[WorkflowService, Depends(get_workflow_service)],
+        _: Annotated[str, Depends(get_bearer_token)],
+    ) -> WorkflowDocument:
+        return await service.publish(workflow_id, False)
+
+    async def run(
+        self,
+        workflow_id: UUID,
+        body: WorkflowRunRequest,
+        service: Annotated[WorkflowService, Depends(get_workflow_service)],
+        token: Annotated[str, Depends(get_bearer_token)],
+        principal: Annotated[PlatformPrincipal, Depends(get_platform_principal)],
+    ) -> WorkflowRunResponse:
+        triggered_by = principal.username or principal.user_id or principal.subject
+        return await service.run(workflow_id, body, token, triggered_by)
+
+====================================================================================================
+FILE: execution-service/src/agent_execution/api/dependencies.py
+====================================================================================================
+
+from __future__ import annotations
+
+from typing import Annotated
+
+from fastapi import Depends, Header, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from platform_auth import AuthError, PlatformPrincipal
+
+from agent_execution.core.container import ApplicationContainer, get_container
+from agent_execution.core.exceptions import ServiceError
+from agent_execution.services.agent_execution_service import AgentExecutionService
+from agent_execution.services.audit_service import AuditService
+from agent_execution.services.deployment_service import DeploymentService
+from agent_execution.services.thread_service import ThreadService
+from agent_execution.settings import Settings, get_settings
+
+bearer_scheme = HTTPBearer(
+    auto_error=False, description="Platform JWT (paste without the 'Bearer ' prefix)"
+)
+
+
+def get_app_container(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ApplicationContainer:
+    return get_container(settings)
+
+
+def get_execution_service(
+    container: Annotated[ApplicationContainer, Depends(get_app_container)],
+) -> AgentExecutionService:
+    return container.execution_service
+
+
+def get_thread_service(
+    container: Annotated[ApplicationContainer, Depends(get_app_container)],
+) -> ThreadService:
+    return container.thread_service
+
+
+def get_deployment_service(
+    container: Annotated[ApplicationContainer, Depends(get_app_container)],
+) -> DeploymentService:
+    return container.deployment_service
+
+
+async def get_platform_principal(
+    container: Annotated[ApplicationContainer, Depends(get_app_container)],
+    request: Request,
+    creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+) -> PlatformPrincipal:
+    # Swagger's Authorize button fills `creds`; fall back to the raw header so
+    # existing clients that send an unprefixed token keep working.
+    authorization = (
+        f"Bearer {creds.credentials}" if creds else request.headers.get("authorization")
+    )
+    try:
+        return await container.platform_auth.authenticate(authorization)
+    except AuthError as exc:
+        raise ServiceError(exc.code, exc.message, exc.status_code) from exc
+
+
+def get_bearer_token(
+    principal: Annotated[PlatformPrincipal, Depends(get_platform_principal)],
+) -> str:
+    return principal.token
+
+
+def get_api_key(x_api_key: Annotated[str | None, Header()] = None) -> str:
+    if not x_api_key:
+        raise ServiceError("UNAUTHORIZED", "X-Api-Key is required.", 401)
+    return x_api_key
+
+
+def get_audit_service(
+    container: Annotated[ApplicationContainer, Depends(get_app_container)],
+) -> AuditService:
+    return container.audit_service
+
+
+def get_workflow_service(
+    container: Annotated[ApplicationContainer, Depends(get_app_container)],
+):
+    return container.workflow_service
+
+====================================================================================================
+FILE: execution-service/src/agent_execution/api/router.py
+====================================================================================================
+
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+from agent_execution.api.controllers.deployment_controller import DeploymentController
+from agent_execution.api.controllers.health_controller import HealthController
+from agent_execution.api.controllers.invoke_controller import InvokeController
+from agent_execution.api.controllers.run_controller import RunController
+from agent_execution.api.controllers.thread_controller import ThreadController
+from agent_execution.api.controllers.workflow_controller import WorkflowController
+from agent_execution.api.controllers.audit_controller import AuditController
+
+
+def create_api_router() -> APIRouter:
+    router = APIRouter(prefix="/api/v1")
+    HealthController(router)
+    ThreadController(router)
+    RunController(router)
+    DeploymentController(router)
+    InvokeController(router)
+    AuditController(router)
+    WorkflowController(router)
+    return router
+
+====================================================================================================
+FILE: execution-service/src/agent_execution/core/container.py
+====================================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from platform_auth import PlatformTokenVerifier, parse_codes
+
+from agent_execution.agents.graph.context import AgentGraphContext
+from agent_execution.infrastructure.auth.service_token_provider import (
+    ServiceAuthTokenProvider,
+)
+from agent_execution.infrastructure.conversation_store.factory import (
+    create_conversation_history_store,
+)
+from agent_execution.infrastructure.http_pool import HttpClientPool
+from agent_execution.infrastructure.persistence.database import Database
+from agent_execution.infrastructure.persistence.deployment_repository import (
+    DeploymentRepository,
+)
+from agent_execution.infrastructure.persistence.run_repository import RunRepository
+from agent_execution.infrastructure.persistence.thread_repository import (
+    ThreadRepository,
+)
+from agent_execution.infrastructure.persistence.workflow_repository import (
+    WorkflowRepository,
+)
+from agent_execution.infrastructure.platform.platform_clients import PlatformClients
+from agent_execution.services.agent_execution_service import AgentExecutionService
+from agent_execution.services.audit_service import AuditService
+from agent_execution.services.cleanup_service import CleanupService
+from agent_execution.services.deployment_service import DeploymentService
+from agent_execution.services.run_slots import RunSlots
+from agent_execution.services.storage_client import StorageClient
+from agent_execution.services.thread_service import ThreadService
+from agent_execution.services.worker import ExecutionWorker
+from agent_execution.services.workflow_service import WorkflowService
+from agent_execution.settings import Settings
+
+
+@dataclass
+class ApplicationContainer:
+    settings: Settings
+    database: Database = field(init=False)
+    http_pool: HttpClientPool = field(init=False)
+    token_provider: ServiceAuthTokenProvider = field(init=False)
+    platform_auth: PlatformTokenVerifier = field(init=False)
+    platform: PlatformClients = field(init=False)
+    graph_context: AgentGraphContext = field(init=False)
+    threads: ThreadRepository = field(init=False)
+    runs: RunRepository = field(init=False)
+    deployments: DeploymentRepository = field(init=False)
+    thread_service: ThreadService = field(init=False)
+    deployment_service: DeploymentService = field(init=False)
+    execution_service: AgentExecutionService = field(init=False)
+    cleanup_service: CleanupService = field(init=False)
+    worker: ExecutionWorker = field(init=False)
+    audit_service: AuditService = field(init=False)
+    workflow_service: WorkflowService = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.database = Database(self.settings.database_url())
+        self.http_pool = HttpClientPool(self.settings)
+        self.token_provider = ServiceAuthTokenProvider(
+            self.settings, self.http_pool.auth
+        )
+        self.platform_auth = PlatformTokenVerifier(
+            configured=bool(self.settings.auth_service_base_url.strip()),
+            http=self.http_pool.auth,
+            me_path=self.settings.auth_me_path,
+            cache_ttl_seconds=self.settings.auth_principal_cache_seconds,
+            required_permissions=parse_codes(self.settings.auth_required_permissions),
+        )
+        self.platform = PlatformClients.from_pool(
+            self.http_pool, self.token_provider, verify_ssl=self.settings.verify_ssl
+        )
+        conversations = create_conversation_history_store(self.database)
+        storage = StorageClient(self.settings)
+        # self.graph_context = AgentGraphContext.create(
+        #     self.settings, self.platform, conversations, storage, self.token_provider
+        # )
+        self.graph_context = AgentGraphContext.create(
+            self.settings,
+            self.platform,
+            conversations,
+            storage,
+            self.token_provider,
+            local_tools_http=self.http_pool.local_tools,
+        )
+        self.threads = ThreadRepository(self.database)
+        self.runs = RunRepository(self.database)
+        self.deployments = DeploymentRepository(self.database)
+        self.thread_service = ThreadService(
+            self.settings, self.threads, self.graph_context.manifest_service
+        )
+        self.execution_service = AgentExecutionService(
+            self.settings,
+            self.graph_context,
+            self.thread_service,
+            self.runs,
+            RunSlots(self.settings),
+        )
+        self.cleanup_service = CleanupService(
+            self.threads, self.runs, conversations, storage
+        )
+        self.worker = ExecutionWorker(
+            self.settings, self.runs, self.execution_service, self.cleanup_service
+        )
+        self.audit_service = AuditService(self.runs, self.thread_service)
+        self.workflow_service = WorkflowService(
+            WorkflowRepository(self.database),
+            self.thread_service,
+            self.execution_service,
+        )
+        self.deployment_service = DeploymentService(
+            self.deployments,
+            self.graph_context.manifest_service,
+            self.settings,
+        )
+
+    async def shutdown(self) -> None:
+        await self.graph_context.aclose()
+        await self.database.aclose()
+        await self.http_pool.aclose()
+
+
+_container: ApplicationContainer | None = None
+
+
+def get_container(settings: Settings) -> ApplicationContainer:
+    global _container
+    if _container is None:
+        _container = ApplicationContainer(settings)
+    return _container
+
+
+async def shutdown_container() -> None:
+    global _container
+    if _container is not None:
+        await _container.shutdown()
+        _container = None
+
+====================================================================================================
+FILE: execution-service/src/agent_execution/core/exceptions.py
+====================================================================================================
+
+from __future__ import annotations
+
+
+class ServiceError(Exception):
+    def __init__(self, code: str, message: str, status_code: int = 400) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+
+====================================================================================================
+FILE: execution-service/src/agent_execution/schemas/runs.py
+====================================================================================================
+
+from __future__ import annotations
+
+from datetime import datetime
+from enum import Enum
+from typing import Any
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class RunStatus(str, Enum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class Dispatch(str, Enum):
+    SYNC = "SYNC"
+    ASYNC = "ASYNC"
+
+
+class CreateRunRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    input: str
+    input_artifact_ids: list[UUID] = Field(
+        default_factory=list, alias="inputArtifactIds"
+    )
+    org_id: str | None = Field(default=None, alias="orgId")
+    session_id: str | None = Field(default=None, alias="sessionId")
+    stream: bool = False
+    background: bool = False
+    idempotency_key: str | None = Field(default=None, alias="idempotencyKey")
+
+
+class InvokeRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    input: str
+    thread_id: UUID | None = Field(default=None, alias="threadId")
+    input_artifact_ids: list[UUID] = Field(
+        default_factory=list, alias="inputArtifactIds"
+    )
+    stream: bool = False
+    background: bool = False
+    idempotency_key: str | None = Field(default=None, alias="idempotencyKey")
+
+
+class RunResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    run_id: UUID = Field(alias="runId")
+    thread_id: UUID = Field(alias="threadId")
+    agent_id: UUID = Field(alias="agentId")
+    status: RunStatus
+    dispatch: Dispatch
+    input: str
+    output: str | None = None
+    error: str | None = None
+    revision_id: UUID | None = Field(default=None, alias="revisionId")
+    manifest_hash: str = Field(default="", alias="manifestHash")
+    attempt: int = 0
+    input_artifact_ids: list[UUID] = Field(
+        default_factory=list, alias="inputArtifactIds"
+    )
+    output_artifact_ids: list[UUID] = Field(
+        default_factory=list, alias="outputArtifactIds"
+    )
+    steps: list[str] = Field(default_factory=list)
+    stop_reason: str | None = Field(default=None, alias="stopReason")
+    created_at: datetime = Field(alias="createdAt")
+    started_at: datetime | None = Field(default=None, alias="startedAt")
+    completed_at: datetime | None = Field(default=None, alias="completedAt")
+
+
+class ExecutionStep(BaseModel):
+    name: str
+    detail: str | None = None
+
+
+class MemorySnapshot(BaseModel):
+    scope: str | None = None
+    total_turns: int = 0
+    turns_in_prompt: int = 0
+    truncated_for_context_window: bool = False
+    persisted: bool = False
+
+
+class RunResult(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: UUID = Field(alias="agentId")
+    thread_id: UUID = Field(alias="threadId")
+    execution_id: UUID = Field(alias="executionId")
+    run_id: UUID = Field(alias="runId")
+    session_id: str = Field(alias="sessionId")
+    output: str
+    output_artifact_ids: list[UUID] = Field(
+        default_factory=list, alias="outputArtifactIds"
+    )
+    steps: list[ExecutionStep] = Field(default_factory=list)
+    memory: MemorySnapshot = Field(default_factory=MemorySnapshot)
+    retrieved_context: list[dict[str, Any]] = Field(
+        default_factory=list, alias="retrievedContext"
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CreateDeploymentRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str | None = None  # optional: derived from the agent name
+    revision_id: UUID | None = Field(default=None, alias="revisionId")
+    retention_policy: str = Field(default="PERMANENT", alias="retentionPolicy")
+
+
+class DeploymentResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    deployment_id: UUID = Field(alias="deploymentId")
+    agent_id: UUID = Field(alias="agentId")
+    slug: str
+    revision_id: UUID | None = Field(default=None, alias="revisionId")
+    retention_policy: str = Field(alias="retentionPolicy")
+    enabled: bool
+    created_at: datetime = Field(alias="createdAt")
+    api_key: str | None = Field(default=None, alias="apiKey")
+    key_available: bool = Field(default=False, alias="keyAvailable")
+    invoke_url: str = Field(default="", alias="invokeUrl")
+    threads_url: str = Field(default="", alias="threadsUrl")
+
+====================================================================================================
+FILE: execution-service/src/agent_execution/services/agent_execution_service.py
+====================================================================================================
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import logging
+import os
+from collections.abc import AsyncIterator
+from datetime import datetime, timedelta, timezone
+from uuid import UUID, uuid4
+
+from agent_execution.agents.graph.builder import build_execution_graph
+from agent_execution.agents.graph.context import AgentGraphContext
+from agent_execution.agents.graph.nodes import AgentGraphNodes
+from agent_execution.agents.graph.state import AgentGraphState
+from agent_execution.core.exceptions import ServiceError
+from agent_execution.infrastructure.persistence.run_repository import RunRepository
+from agent_execution.schemas.runs import (
+    CreateRunRequest,
+    Dispatch,
+    MemorySnapshot,
+    RunResponse,
+    RunResult,
+    RunStatus,
+    ExecutionStep,
+)
+from agent_execution.schemas.runtime import RuntimeManifest
+from agent_execution.schemas.threads import ExecutionType
+from agent_execution.services.run_policy import status_after_failure
+from agent_execution.services.run_slots import RunSlots
+from agent_execution.services.thread_service import ThreadService
+from agent_execution.settings import Settings
+
+logger = logging.getLogger(__name__)
+
+
+class AgentExecutionService:
+    def __init__(
+        self,
+        settings: Settings,
+        context: AgentGraphContext,
+        threads: ThreadService,
+        runs: RunRepository,
+        slots: RunSlots,
+    ) -> None:
+        self._settings = settings
+        self._context = context
+        self._threads = threads
+        self._runs = runs
+        self._slots = slots
+        self._graph = build_execution_graph(context)
+        self._nodes = AgentGraphNodes(context)
+        self._api_worker = f"api-{os.getpid()}"
+
+    async def aclose(self) -> None:
+        await self._context.aclose()
+
+    async def start(
+        self,
+        agent_id: UUID,
+        thread_id: UUID,
+        request: CreateRunRequest,
+        bearer_token: str | None,
+    ) -> RunResult | RunResponse:
+        thread = await self._threads.get_open(agent_id, thread_id)
+        manifest = await self._threads.manifest_for_run(thread, bearer_token)
+        if request.background:
+            row, created = await self._insert(
+                thread,
+                request,
+                manifest,
+                Dispatch.ASYNC,
+                bearer_token=None,
+                worker_id=None,
+                attempt=0,
+            )
+            if created:
+                logger.info(
+                    "run.queued runId=%s threadId=%s agentId=%s inputChars=%s",
+                    row["run_id"],
+                    row["thread_id"],
+                    row["agent_id"],
+                    len(request.input),
+                )
+            return self._run_response(row)
+        if request.stream:
+            raise ServiceError(
+                "USE_STREAM",
+                "Set stream=true on the HTTP call and read the event stream.",
+                400,
+            )
+        return await self._execute_sync(thread, request, manifest, bearer_token)
+
+    async def stream(
+        self,
+        agent_id: UUID,
+        thread_id: UUID,
+        request: CreateRunRequest,
+        bearer_token: str | None,
+    ) -> AsyncIterator[str]:
+        thread = await self._threads.get_open(agent_id, thread_id)
+        manifest = await self._threads.manifest_for_run(thread, bearer_token)
+        row, created = await self._insert(
+            thread,
+            request,
+            manifest,
+            Dispatch.SYNC,
+            bearer_token,
+            worker_id=self._api_worker,
+            attempt=1,
+        )
+        if not created:
+            if row["status"] == RunStatus.SUCCEEDED.value:
+                yield self._sse(
+                    "done", self._result_from_row(row, manifest).model_dump(mode="json")
+                )
+            else:
+                yield self._sse(
+                    "error",
+                    {
+                        "code": "RUN_IN_PROGRESS",
+                        "message": f"Run {row['run_id']} is {row['status']}.",
+                    },
+                )
+            return
+        run_id = row["run_id"]
+        self._log_started(row, request, Dispatch.SYNC.value)
+        beat = asyncio.create_task(self._heartbeat(run_id, self._api_worker))
+        try:
+            async with self._slots.acquire():
+                state = self._initial_state(
+                    thread, request, bearer_token, manifest, run_id
+                )
+                if manifest.has_tools:
+                    final_state = await self._graph.ainvoke(state)
+                else:
+                    prepared = await self._nodes.prepare_context(state)
+                    parts: list[str] = []
+                    async for token in self._context.llm_gateway.stream(
+                        model=manifest.model.model_identifier,
+                        system_prompt=prepared["system_prompt"],
+                        user_input=request.input,
+                        temperature=manifest.temperature,
+                        bearer_token=bearer_token,
+                        base_url=manifest.model.base_url,
+                        api_key=manifest.model.api_key,
+                    ):
+                        parts.append(token)
+                        yield self._sse("token", {"text": token})
+                    streamed = {**prepared, "output": "".join(parts)}
+                    persisted = await self._nodes.persist_memory(streamed)
+                    final_state = {
+                        **streamed,
+                        **persisted,
+                        "steps": [
+                            "prepare_context",
+                            "call_llm_stream",
+                            "persist_memory",
+                        ],
+                    }
+            result = await self._finish_success(thread, run_id, manifest, final_state)
+            yield self._sse("done", result.model_dump(mode="json"))
+        except Exception as exc:
+            await self._finish_failure(row, exc)
+            yield self._sse(
+                "error",
+                {"code": getattr(exc, "code", "RUN_FAILED"), "message": str(exc)},
+            )
+        finally:
+            beat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await beat
+
+    async def execute_claimed(self, row, worker_id: str) -> None:
+        logger.info(
+            "run.claimed runId=%s threadId=%s workerId=%s attempt=%s",
+            row["run_id"],
+            row["thread_id"],
+            worker_id,
+            row["attempt"],
+        )
+        thread = await self._threads.get_open(row["agent_id"], row["thread_id"])
+        manifest = await self._threads.manifest_for_run(thread, None)
+        beat = asyncio.create_task(self._heartbeat(row["run_id"], worker_id))
+        request = CreateRunRequest(
+            input=row["input"],
+            input_artifact_ids=_uuid_list(row["input_artifact_ids"]),
+            org_id=row["org_id"],
+        )
+        try:
+            async with self._slots.acquire():
+                final_state = await self._graph.ainvoke(
+                    self._initial_state(thread, request, None, manifest, row["run_id"])
+                )
+            await self._finish_success(thread, row["run_id"], manifest, final_state)
+        except Exception as exc:
+            logger.exception("Background run %s failed", row["run_id"])
+            await self._finish_failure(row, exc)
+        finally:
+            beat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await beat
+
+    async def get_run(
+        self,
+        agent_id: UUID,
+        thread_id: UUID,
+        run_id: UUID,
+        bearer_token: str | None = None,
+        *,
+        authorize: bool = True,
+    ) -> RunResponse:
+        if authorize:
+            await self._threads.get(agent_id, thread_id, bearer_token)
+        row = await self._runs.get(run_id)
+        if row is None or row["thread_id"] != thread_id or row["agent_id"] != agent_id:
+            raise ServiceError("NOT_FOUND", "Run not found.", 404)
+        return self._run_response(row)
+
+    async def list_runs(
+        self,
+        agent_id: UUID,
+        thread_id: UUID,
+        limit: int,
+        offset: int,
+        bearer_token: str | None = None,
+    ) -> list[RunResponse]:
+        await self._threads.get(agent_id, thread_id, bearer_token)
+        rows = await self._runs.list_for_thread(thread_id, limit, offset)
+        return [self._run_response(row) for row in rows]
+
+    async def _execute_sync(self, thread, request, manifest, bearer_token) -> RunResult:
+        row, created = await self._insert(
+            thread,
+            request,
+            manifest,
+            Dispatch.SYNC,
+            bearer_token,
+            worker_id=self._api_worker,
+            attempt=1,
+        )
+        if not created:
+            if row["status"] == RunStatus.SUCCEEDED.value:
+                return self._result_from_row(row, manifest)
+            raise ServiceError(
+                "RUN_IN_PROGRESS", f"Run {row['run_id']} is {row['status']}.", 409
+            )
+        self._log_started(row, request, Dispatch.SYNC.value)
+        beat = asyncio.create_task(self._heartbeat(row["run_id"], self._api_worker))
+        try:
+            async with self._slots.acquire():
+                final_state = await self._graph.ainvoke(
+                    self._initial_state(
+                        thread, request, bearer_token, manifest, row["run_id"]
+                    )
+                )
+            return await self._finish_success(
+                thread, row["run_id"], manifest, final_state
+            )
+        except Exception as exc:
+            await self._finish_failure(row, exc)
+            raise
+        finally:
+            beat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await beat
+
+    async def _insert(
+        self,
+        thread,
+        request,
+        manifest,
+        dispatch: Dispatch,
+        bearer_token,
+        worker_id,
+        attempt: int,
+    ):
+        del bearer_token
+        lease = None
+        started = None
+        if dispatch == Dispatch.SYNC:
+            started = datetime.now(timezone.utc)
+            lease = started + timedelta(seconds=self._settings.run_lease_seconds)
+        try:
+            return await self._runs.insert(
+                run_id=uuid4(),
+                thread_id=thread["thread_id"],
+                agent_id=thread["agent_id"],
+                status=(
+                    RunStatus.RUNNING.value
+                    if dispatch == Dispatch.SYNC
+                    else RunStatus.QUEUED.value
+                ),
+                dispatch=dispatch.value,
+                user_input=request.input,
+                revision_id=manifest.revision_id,
+                manifest_hash=manifest.manifest_hash,
+                attempt=attempt,
+                max_attempts=self._settings.run_max_attempts,
+                worker_id=worker_id,
+                lease_expires_at=lease,
+                idempotency_key=request.idempotency_key,
+                input_artifact_ids=[str(item) for item in request.input_artifact_ids],
+                org_id=request.org_id,
+                started_at=started,
+            )
+        except Exception as exc:
+            if "ux_runs_idempotency" in str(exc) or "duplicate key" in str(exc).lower():
+                raise ServiceError(
+                    "CONFLICT", "A run with this idempotency key already exists.", 409
+                ) from exc
+            raise
+
+    async def _finish_success(
+        self, thread, run_id: UUID, manifest: RuntimeManifest, state: AgentGraphState
+    ) -> RunResult:
+        output = state.get("output") or ""
+        output_ids: list[UUID] = []
+        if self._settings.persist_output_artifacts and output:
+            expires = thread["expires_at"].isoformat() if thread["expires_at"] else None
+            artifact_id = await self._context.storage.put_text_artifact(
+                thread_id=thread["thread_id"],
+                agent_id=thread["agent_id"],
+                run_id=run_id,
+                filename=f"run-{run_id}.txt",
+                text=output,
+                expires_at=expires,
+            )
+            if artifact_id:
+                output_ids.append(artifact_id)
+        steps = list(state.get("steps") or [])
+        retrieved = list(state.get("retrieved_context") or [])
+        logger.info(
+            "run.succeeded runId=%s threadId=%s stopReason=%s outputChars=%s",
+            run_id,
+            thread["thread_id"],
+            state.get("stop_reason") or "completed",
+            len(output),
+        )
+        await self._runs.mark_succeeded(
+            run_id,
+            output=output,
+            output_artifact_ids=[str(item) for item in output_ids],
+            steps=steps,
+            retrieved_context=retrieved,
+            stop_reason=state.get("stop_reason") or "completed",
+            manifest_hash=manifest.manifest_hash,
+            revision_id=manifest.revision_id,
+            tool_calls=list(state.get("tool_results") or []),
+        )
+        return self._to_result(thread, run_id, manifest, state, output_ids)
+
+    async def _finish_failure(self, row, exc: Exception) -> None:
+        attempt = int(row["attempt"] or 0)
+        requeue = (
+            row["dispatch"] == Dispatch.ASYNC.value
+            and status_after_failure(attempt, int(row["max_attempts"]))
+            == RunStatus.QUEUED
+        )
+        logger.warning(
+            "run.failed runId=%s attempt=%s requeue=%s error=%s",
+            row["run_id"],
+            attempt,
+            requeue,
+            type(exc).__name__,
+        )
+        await self._runs.mark_failed(row["run_id"], str(exc), requeue=requeue)
+
+    @staticmethod
+    def _log_started(row, request: CreateRunRequest, dispatch: str) -> None:
+        logger.info(
+            "run.started runId=%s threadId=%s agentId=%s dispatch=%s inputChars=%s",
+            row["run_id"],
+            row["thread_id"],
+            row["agent_id"],
+            dispatch,
+            len(request.input),
+        )
+
+    async def _heartbeat(self, run_id: UUID, worker_id: str) -> None:
+        interval = max(5, self._settings.run_lease_seconds // 3)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self._runs.heartbeat(
+                    run_id, worker_id, self._settings.run_lease_seconds
+                )
+            except Exception:
+                logger.exception("Run heartbeat failed for %s", run_id)
+
+    def _initial_state(
+        self, thread, request, bearer_token, manifest: RuntimeManifest, run_id: UUID
+    ) -> AgentGraphState:
+        return {
+            "agent_id": str(thread["agent_id"]),
+            "user_input": request.input,
+            "thread_id": str(thread["thread_id"]),
+            "run_id": str(run_id),
+            "execution_type": thread["execution_type"],
+            "input_artifact_ids": [str(item) for item in request.input_artifact_ids],
+            "session_id": (request.session_id or "").strip() or str(thread["thread_id"]),
+            "org_id": request.org_id,
+            "bearer_token": bearer_token,
+            "manifest": manifest.model_dump(mode="json"),
+            "steps": [],
+        }
+
+    def _to_result(
+        self, thread, run_id, manifest: RuntimeManifest, state, output_ids: list[UUID]
+    ) -> RunResult:
+        return RunResult(
+            agent_id=thread["agent_id"],
+            thread_id=thread["thread_id"],
+            execution_id=thread["thread_id"],
+            run_id=run_id,
+            session_id=str(thread["thread_id"]),
+            output=state.get("output") or "",
+            output_artifact_ids=output_ids,
+            steps=[ExecutionStep(name=name) for name in (state.get("steps") or [])],
+            memory=MemorySnapshot(
+                scope=state.get("memory_scope"),
+                total_turns=state.get("history_total_turns", 0),
+                turns_in_prompt=state.get("history_turns_in_prompt", 0),
+                truncated_for_context_window=bool(state.get("history_truncated"))
+                or bool(state.get("context_messages_trimmed")),
+                persisted=bool(state.get("memory_persisted")),
+            ),
+            retrieved_context=state.get("retrieved_context") or [],
+            metadata={
+                "agentName": manifest.name,
+                "model": manifest.model.model_identifier,
+                "manifestHash": manifest.manifest_hash,
+                "revisionId": (
+                    str(manifest.revision_id) if manifest.revision_id else None
+                ),
+                "runtime": "langgraph",
+                "toolRounds": state.get("tool_round", 0),
+                "stopReason": state.get("stop_reason") or "completed",
+                "executionType": thread["execution_type"],
+            },
+        )
+
+    def _result_from_row(self, row, manifest: RuntimeManifest) -> RunResult:
+        output_ids = _uuid_list(row["output_artifact_ids"])
+        steps = (
+            row["steps"]
+            if isinstance(row["steps"], list)
+            else json.loads(row["steps"] or "[]")
+        )
+        retrieved = row["retrieved_context"]
+        if isinstance(retrieved, str):
+            retrieved = json.loads(retrieved)
+        return RunResult(
+            agent_id=row["agent_id"],
+            thread_id=row["thread_id"],
+            execution_id=row["thread_id"],
+            run_id=row["run_id"],
+            session_id=str(row["thread_id"]),
+            output=row["output"] or "",
+            output_artifact_ids=output_ids,
+            steps=[ExecutionStep(name=name) for name in steps],
+            retrieved_context=retrieved or [],
+            metadata={"manifestHash": row["manifest_hash"], "runtime": "langgraph"},
+        )
+
+    @staticmethod
+    def _run_response(row) -> RunResponse:
+        return RunResponse(
+            run_id=row["run_id"],
+            thread_id=row["thread_id"],
+            agent_id=row["agent_id"],
+            status=RunStatus(row["status"]),
+            dispatch=Dispatch(row["dispatch"]),
+            input=row["input"],
+            output=row["output"],
+            error=row["error"],
+            revision_id=row["revision_id"],
+            manifest_hash=row["manifest_hash"] or "",
+            attempt=row["attempt"] or 0,
+            input_artifact_ids=_uuid_list(row["input_artifact_ids"]),
+            output_artifact_ids=_uuid_list(row["output_artifact_ids"]),
+            steps=_str_list(row["steps"]),
+            stop_reason=row["stop_reason"],
+            created_at=row["created_at"],
+            started_at=row["started_at"],
+            completed_at=row["completed_at"],
+        )
+
+    @staticmethod
+    def _sse(event: str, data: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=True)}\n\n"
+
+
+def _uuid_list(value) -> list[UUID]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = json.loads(value)
+    ids: list[UUID] = []
+    for item in value or []:
+        try:
+            ids.append(UUID(str(item)))
+        except ValueError:
+            continue
+    return ids
+
+
+def _str_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = json.loads(value)
+    return [str(item) for item in value or []]
+
+====================================================================================================
+FILE: execution-service/tests/test_workflow_engine.py
+====================================================================================================
+
+from uuid import uuid4
+
+import pytest
+
+from agent_execution.core.exceptions import ServiceError
+from agent_execution.schemas.workflows import WorkflowDefinition, WorkflowEdge, WorkflowNode
+from agent_execution.services.workflow_engine import (
+    WorkflowRunError,
+    execute_workflow,
+    render_template,
+)
+
+
+def _agent(node_id: str, agent_id, output: str, template: str = "{{input}}") -> WorkflowNode:
+    return WorkflowNode(id=node_id, type="agent", agentId=agent_id, input=template, output=output)
+
+
+@pytest.mark.asyncio
+async def test_supervisor_path_passes_named_outputs():
+    supervisor = uuid4()
+    maker = uuid4()
+    calls: list[tuple] = []
+
+    async def run_agent(agent_id, text: str) -> str:
+        calls.append((agent_id, text))
+        if agent_id == supervisor:
+            return "plan the query"
+        return "SELECT 1"
+
+    definition = WorkflowDefinition(
+        nodes=[
+            WorkflowNode(id="start", type="start"),
+            _agent("supervisor", supervisor, "plan"),
+            _agent("maker", maker, "query", "{{input}}\n{{plan}}"),
+            WorkflowNode(id="end", type="end"),
+        ],
+        edges=[
+            WorkflowEdge(**{"from": "start", "to": "supervisor"}),
+            WorkflowEdge(**{"from": "supervisor", "to": "maker"}),
+            WorkflowEdge(**{"from": "maker", "to": "end"}),
+        ],
+    )
+    outcome = await execute_workflow(definition, "how many orders", run_agent)
+    assert outcome.output == "SELECT 1"
+    assert outcome.state["plan"] == "plan the query"
+    assert "plan the query" in calls[1][1]
+    assert calls[0][0] == supervisor
+
+
+@pytest.mark.asyncio
+async def test_condition_loops_back_until_approved():
+    reviewer = uuid4()
+    seen = {"n": 0}
+
+    async def run_agent(agent_id, text: str) -> str:
+        seen["n"] += 1
+        return "rejected" if seen["n"] < 2 else "approved"
+
+    definition = WorkflowDefinition(
+        nodes=[
+            WorkflowNode(id="start", type="start"),
+            _agent("reviewer", reviewer, "review", "{{query}}"),
+            WorkflowNode(id="check", type="condition", on="review"),
+            WorkflowNode(id="done", type="end"),
+            WorkflowNode(id="stop", type="end"),
+        ],
+        edges=[
+            WorkflowEdge(**{"from": "start", "to": "reviewer"}),
+            WorkflowEdge(**{"from": "reviewer", "to": "check"}),
+            WorkflowEdge(**{"from": "check", "to": "done", "when": "contains approved"}),
+            WorkflowEdge(**{"from": "check", "to": "reviewer", "when": "otherwise", "maxLoops": 3}),
+        ],
+    )
+    state = {"input": "question"}
+    # The reviewer reads {{query}}, which is empty until something writes it.
+    # Seed it by using input as the template instead.
+    definition.nodes[1] = _agent("reviewer", reviewer, "review", "{{input}}")
+    outcome = await execute_workflow(definition, "question", run_agent)
+    assert outcome.output == "approved"
+    assert seen["n"] == 2
+    assert state is not None
+
+
+@pytest.mark.asyncio
+async def test_loop_limit_stops_a_reject_cycle():
+    reviewer = uuid4()
+
+    async def run_agent(agent_id, text: str) -> str:
+        return "rejected"
+
+    definition = WorkflowDefinition(
+        nodes=[
+            WorkflowNode(id="start", type="start"),
+            _agent("reviewer", reviewer, "review"),
+            WorkflowNode(id="check", type="condition", on="review"),
+            WorkflowNode(id="end", type="end"),
+        ],
+        edges=[
+            WorkflowEdge(**{"from": "start", "to": "reviewer"}),
+            WorkflowEdge(**{"from": "reviewer", "to": "check"}),
+            WorkflowEdge(**{"from": "check", "to": "end", "when": "contains approved"}),
+            WorkflowEdge(**{"from": "check", "to": "reviewer", "when": "otherwise", "maxLoops": 2}),
+        ],
+    )
+    with pytest.raises(WorkflowRunError) as caught:
+        await execute_workflow(definition, "question", run_agent)
+    assert caught.value.code == "WORKFLOW_LIMIT"
+    assert any(step.status == "failed" or step.type == "agent" for step in caught.value.steps)
+
+
+def test_render_leaves_unknown_tokens_empty():
+    assert render_template("{{input}}\n{{missing}}", {"input": "hi"}) == "hi\n"
+
+
+def test_publish_validation_requires_an_agent():
+    definition = WorkflowDefinition(
+        nodes=[
+            WorkflowNode(id="start", type="start"),
+            WorkflowNode(id="agent", type="agent"),
+            WorkflowNode(id="end", type="end"),
+        ],
+        edges=[
+            WorkflowEdge(**{"from": "start", "to": "agent"}),
+            WorkflowEdge(**{"from": "agent", "to": "end"}),
+        ],
+    )
+    from agent_execution.services.workflow_engine import validate_definition
+
+    with pytest.raises(ServiceError):
+        validate_definition(definition, for_run=True)
+
+====================================================================================================
+FILE: frontend/src/api/workflows.ts
+====================================================================================================
+
+import { authTokenStore } from "./authTokenStore";
+import { serviceUrl } from "../config/api";
+import { handleUnauthorized } from "./sessionGuard";
+
+export interface WorkflowNode {
+  id: string;
+  type: "start" | "agent" | "condition" | "end";
+  agentId?: string | null;
+  input?: string;
+  output?: string;
+  on?: string;
+  position?: { x: number; y: number } | null;
+}
+
+export interface WorkflowEdge {
+  from: string;
+  to: string;
+  when?: string;
+  maxLoops?: number | null;
+}
+
+export interface WorkflowDefinition {
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  maxSteps?: number;
+}
+
+export interface WorkflowSummary {
+  workflowId: string;
+  name: string;
+  status: string;
+  updatedAt: string;
+}
+
+export interface WorkflowDocument extends WorkflowSummary {
+  definition: WorkflowDefinition;
+  createdAt: string;
+}
+
+export interface WorkflowStepTrace {
+  nodeId: string;
+  type: string;
+  agentId?: string | null;
+  status: string;
+  input?: string;
+  output?: string;
+  outputKey?: string;
+  error?: string;
+}
+
+export interface WorkflowRunResponse {
+  workflowRunId: string;
+  workflowId: string;
+  status: string;
+  output: string;
+  error: string;
+  sessionId: string;
+  userId: string;
+  steps: WorkflowStepTrace[];
+  state: Record<string, string>;
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const token = authTokenStore.get();
+  const response = await fetch(serviceUrl("execution", `/api/v1/workflows${path}`), {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...init.headers,
+    },
+  });
+  if (response.status === 401) {
+    handleUnauthorized(token);
+  }
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    const detail = data?.message || data?.detail || data?.Message || response.statusText;
+    throw new Error(typeof detail === "string" ? detail : `Workflow request failed (${response.status})`);
+  }
+  return data as T;
+}
+
+export const workflowsApi = {
+  list: () => request<WorkflowSummary[]>(""),
+  get: (id: string) => request<WorkflowDocument>(`/${id}`),
+  create: (name: string, definition: WorkflowDefinition) =>
+    request<WorkflowDocument>("", {
+      method: "POST",
+      body: JSON.stringify({ name, definition }),
+    }),
+  update: (id: string, name: string, definition: WorkflowDefinition) =>
+    request<WorkflowDocument>(`/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ name, definition }),
+    }),
+  publish: (id: string) => request<WorkflowDocument>(`/${id}/publish`, { method: "POST" }),
+  unpublish: (id: string) => request<WorkflowDocument>(`/${id}/unpublish`, { method: "POST" }),
+  run: (
+    id: string,
+    body: { input: string; sessionId?: string; userId?: string; orgId?: string },
+  ) =>
+    request<WorkflowRunResponse>(`/${id}/runs`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+};
 
 ====================================================================================================
 FILE: execution-service/src/agent_execution/services/manifest_service.py
