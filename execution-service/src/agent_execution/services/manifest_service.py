@@ -386,11 +386,11 @@ class RagContextService:
             raw_context.append(entry)
             if not claims:
                 continue
-            lines = []
-            for claim, source in claims:
+            for index, (claim, source) in enumerate(claims):
                 number += 1
-                lines.append(
-                    f"[{number}] {claim}" + (f" (source: {source})" if source else "")
-                )
-            blocks.append(f"KB: {label}\n" + "\n".join(lines))
+                line = f"[{number}] {claim}" + (f" (source: {source})" if source else "")
+                if index == 0:
+                    blocks.append(f"KB: {label}\n{line}")
+                else:
+                    blocks.append(line)
         return blocks, raw_context

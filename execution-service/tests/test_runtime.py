@@ -88,6 +88,24 @@ def test_prompt_includes_files_and_knowledge():
     assert "notes.txt" in prompt
 
 
+def test_oversized_knowledge_keeps_the_top_passages():
+    manifest = _manifest()
+    passages = [f"[{index}] " + ("fact " * 80) for index in range(1, 8)]
+    prompt, traces = PromptCompositionService.compose_within_budget(
+        manifest,
+        None,
+        None,
+        passages,
+        None,
+        "What does the paper say?",
+        budget_chars=1200,
+    )
+    assert "Retrieved knowledge base context" in prompt
+    assert "[1]" in prompt
+    assert "context.trimmed:knowledge" in traces
+    assert len(prompt) + len("What does the paper say?") <= 1200
+
+
 def test_production_threads_pin_manifest_and_retries_requeue():
     assert pins_manifest(ExecutionType.PRODUCTION) is True
     assert pins_manifest(ExecutionType.TEST) is False

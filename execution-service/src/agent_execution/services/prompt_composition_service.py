@@ -20,7 +20,10 @@ class PromptCompositionService:
             sections.append(history_block)
         if kb_blocks:
             sections.append(
-                "Retrieved knowledge base context:\n" + "\n\n".join(kb_blocks)
+                "Retrieved knowledge base context:\n"
+                "Use this context when it answers the user. "
+                "If it does not contain the answer, say so.\n"
+                + "\n\n".join(kb_blocks)
             )
         if artifact_block:
             sections.append(artifact_block)
@@ -62,6 +65,16 @@ class PromptCompositionService:
                 _add_trace(traces, "context.trimmed:files")
                 continue
             if knowledge:
+                # Drop the lowest-ranked passage first. A single oversized passage
+                # is shortened from the end so the top of the evidence still reaches the model.
+                overflow = len(composed()) + len(user_input) - budget_chars
+                last = knowledge[-1]
+                if len(last) > 400 and (len(knowledge) == 1 or len(last) > overflow + 80):
+                    keep = max(400, len(last) - overflow - 32)
+                    if keep < len(last):
+                        knowledge[-1] = last[:keep].rstrip() + "\n…[truncated]"
+                        _add_trace(traces, "context.trimmed:knowledge")
+                        continue
                 knowledge.pop()
                 _add_trace(traces, "context.trimmed:knowledge")
                 continue
