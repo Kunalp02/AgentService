@@ -1,4 +1,4 @@
-export type { RolePermissionKey } from "./types/auth";
+export type RolePermissionKey = string;
 
 export type AgentStatus = "Draft" | "Published" | string;
 export type KnowledgeBaseMode = "Context" | "Tool";
@@ -275,4 +275,6 @@ export function toCreatePayload(form: {
     })),
   };
 }
+
+
 

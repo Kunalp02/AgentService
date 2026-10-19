@@ -130,3 +130,6 @@ class DeploymentResponse(BaseModel):
     key_available: bool = Field(default=False, alias="keyAvailable")
     invoke_url: str = Field(default="", alias="invokeUrl")
     threads_url: str = Field(default="", alias="threadsUrl")
+
+
+

@@ -57,3 +57,6 @@ class ApiErrorHandler:
 
 def register_exception_handlers(app: FastAPI) -> None:
     ApiErrorHandler().register(app)
+
+
+

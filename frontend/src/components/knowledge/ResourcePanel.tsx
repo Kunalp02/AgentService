@@ -132,3 +132,5 @@ export const ResourcePanel: React.FC<{ active: boolean }> = ({ active }) => {
     </div>
   );
 };
+
+

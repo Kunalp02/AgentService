@@ -106,3 +106,6 @@ class ToolDefinitionService:
             if normalized in candidates:
                 return ("kb", kb)
         return None
+
+
+

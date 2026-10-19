@@ -851,3 +851,5 @@ export const SchemaPreview: React.FC<{ schemaJson?: string | null }> = ({ schema
   if (!parsed.schema) return <p className="text-[11px] text-slate-500 italic">No parameters schema.</p>;
   return <SchemaForm schema={parsed.schema} value={value} onChange={setValue} />;
 };
+
+

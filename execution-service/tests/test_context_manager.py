@@ -121,3 +121,6 @@ def test_fit_messages_raises_when_unrecoverable():
     with pytest.raises(ServiceError) as exc:
         manager.fit_messages(messages, budget=budget)
     assert exc.value.code == "CONTEXT_TOO_LARGE"
+
+
+

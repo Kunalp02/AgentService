@@ -66,3 +66,6 @@ class ThreadResponse(BaseModel):
     session_id: str = Field(alias="sessionId")
     expires_at: datetime | None = Field(default=None, alias="expiresAt")
     created_at: datetime = Field(alias="createdAt")
+
+
+

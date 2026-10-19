@@ -95,3 +95,6 @@ def test_json_formatter_includes_request_id():
     line = JsonFormatter().format(record)
     assert '"requestId": "req-json"' in line
     assert "run.started" in line
+
+
+

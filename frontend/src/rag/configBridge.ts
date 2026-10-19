@@ -1,5 +1,3 @@
-
-
 import { cfg } from './apiClient';
 import { ChunkMethod, KbSummary, Strategy, StorageEngine } from './ragTypes';
 
@@ -316,3 +314,5 @@ export async function configUpdateKb(id: string, p: any) {
 }
 
 export const configDeleteKb = (id: string) => cfg('DELETE', '/knowledge-bases/' + id);
+
+

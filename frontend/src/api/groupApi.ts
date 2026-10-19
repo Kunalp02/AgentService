@@ -8,3 +8,5 @@ export const groupsApi = {
   update: (id: string, payload: UpdateGroupRequest) => authApiClient.put<GroupDto>(`/api/v1/groups/${id}`, payload),
   remove: (id: string) => authApiClient.delete<void>(`/api/v1/groups/${id}`),
 };
+
+

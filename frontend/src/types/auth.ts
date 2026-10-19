@@ -18,7 +18,7 @@ export interface AuthUserSummary {
   email: string | null;
   status: string | null;
   roleProfile: string | null;
-  groups: Record<string, string> | string[] | null;
+  groups: Record<string, string> | string[] | string | null;
 }
 
 export interface LoginResponse {
@@ -32,9 +32,11 @@ export interface IntrospectResponse {
   Active: boolean;
   sub: string | null;
   username: string | null;
-  groups: Record<string, string> | string[] | null;
+  groups: Record<string, string> | string[] | string | null;
   roleProfile: string | null;
   permissions: string[] | string | null;
   exp: number | null;
 }
+
+
 

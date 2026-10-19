@@ -35,3 +35,6 @@ def _content_payload(result: Any) -> list[dict[str, Any]]:
             continue
         blocks.append({"type": type(block).__name__, "value": str(block)})
     return blocks
+
+
+

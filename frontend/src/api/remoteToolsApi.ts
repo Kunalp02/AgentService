@@ -71,3 +71,5 @@ export const remoteToolsApi = {
 
   activeForUse: () => apiClient.get<RemoteMcpServerListItemDto[]>(`${BASE}/active-for-use`),
 };
+
+

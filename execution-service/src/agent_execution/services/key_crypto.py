@@ -28,3 +28,6 @@ def decrypt_key(secret: str, token: str | None) -> str | None:
         return _fernet(secret).decrypt(token.encode()).decode()
     except InvalidToken:
         return None
+
+
+

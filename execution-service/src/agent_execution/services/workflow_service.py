@@ -4,7 +4,9 @@ import json
 from uuid import UUID, uuid4
 
 from agent_execution.core.exceptions import ServiceError
-from agent_execution.infrastructure.persistence.workflow_repository import WorkflowRepository
+from agent_execution.infrastructure.persistence.workflow_repository import (
+    WorkflowRepository,
+)
 from agent_execution.schemas.runs import CreateRunRequest
 from agent_execution.schemas.threads import Channel, CreateThreadRequest, ExecutionType
 from agent_execution.schemas.workflows import (
@@ -196,3 +198,6 @@ def _document(row) -> WorkflowDocument:
         created_at=row["created_at"],
         definition=_definition(row),
     )
+
+
+

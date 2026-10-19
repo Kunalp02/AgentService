@@ -219,3 +219,6 @@ class BifrostLlmGateway:
                 text = (choices[0].get("delta") or {}).get("content")
                 if text:
                     yield str(text)
+
+
+

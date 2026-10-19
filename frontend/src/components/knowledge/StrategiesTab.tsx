@@ -1186,3 +1186,5 @@ export const StrategiesTab: React.FC = () => {
     setBusy('');
   }
 };
+
+

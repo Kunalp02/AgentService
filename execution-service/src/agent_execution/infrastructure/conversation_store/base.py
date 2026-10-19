@@ -21,3 +21,6 @@ class ConversationHistoryStore(Protocol):
     ) -> tuple[ConversationHistory, int, bool]: ...
 
     async def aclose(self) -> None: ...
+
+
+

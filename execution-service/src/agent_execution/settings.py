@@ -50,8 +50,11 @@ class Settings(BaseSettings):
     mcp_client_cache_ttl_seconds: int = 300
     mcp_tool_timeout_seconds: float = 120.0
 
+    # tool_execution_base_url: str = (
+    #     "http://172.19.204.132:8090"  # tool execution service, e.g. http://host:port
+    # )
     tool_execution_base_url: str = (
-        "http://172.19.204.132:8090"  # tool execution service, e.g. http://host:port
+        "http://172.19.204.132:8502"  # tool execution service, e.g. http://host:port
     )
     tool_execution_service_key: str = "dev-secret"  # sent as X-Service-Key
     local_tool_timeout_seconds: float = 120.0
@@ -116,3 +119,6 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+

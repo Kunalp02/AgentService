@@ -21,3 +21,5 @@ export const usersApi = {
   changeStatus: (id: string, payload: ChangeUserStatusRequest) => authApiClient.post<UserDetailDto>(`/api/v1/users/${id}/status`, payload),
   updateAssignments: (id: string, payload: UpdateUserAssignmentsRequest) => authApiClient.put<UserDetailDto>(`/api/v1/users/${id}/assignments`, payload),
 };
+
+

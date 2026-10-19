@@ -46,3 +46,5 @@ export const modelRegistryApi = {
   /** GET /api/v1/model-registry/classifications — lookup list for the classification dropdown. */
   listClassifications: () => apiClient.get<ModelClassificationDto[]>('/model-registry/classifications'),
 };
+
+

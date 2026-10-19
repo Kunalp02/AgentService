@@ -56,3 +56,5 @@ export const localToolsApi = {
   test: (id: string, argumentsJson: string) => apiClient.post<LocalToolTestResult>(`${BASE}/${id}/test`, { argumentsJson }),
   runs: (id: string) => apiClient.get<LocalToolRunHistoryDto[]>(`${BASE}/${id}/runs`),
 };
+
+

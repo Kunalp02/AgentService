@@ -7,3 +7,6 @@ class ServiceError(Exception):
         self.code = code
         self.message = message
         self.status_code = status_code
+
+
+

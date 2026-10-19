@@ -27,6 +27,7 @@ class WorkflowRunError(ServiceError):
         self.steps = steps
         self.state = state
 
+
 _TOKEN = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
 _OTHERWISE = {"otherwise", "else", "default"}
 
@@ -62,7 +63,9 @@ def validate_definition(definition: WorkflowDefinition, *, for_run: bool) -> Non
     for edge in definition.edges:
         if edge.from_node not in known or edge.to_node not in known:
             raise ServiceError(
-                "WORKFLOW_INVALID", "A line points at a node that is not on the canvas.", 400
+                "WORKFLOW_INVALID",
+                "A line points at a node that is not on the canvas.",
+                400,
             )
     if not for_run:
         return
@@ -105,10 +108,20 @@ def _matches(when: str, value: str) -> bool:
     return lowered in value.lower()
 
 
-def _pick_condition(node: WorkflowNode, edges: list[WorkflowEdge], state: dict[str, str]) -> WorkflowEdge:
+def _pick_condition(
+    node: WorkflowNode, edges: list[WorkflowEdge], state: dict[str, str]
+) -> WorkflowEdge:
     value = state.get(node.on.strip(), "")
-    specific = [edge for edge in edges if edge.when.strip().lower() not in _OTHERWISE and edge.when.strip()]
-    fallback = [edge for edge in edges if not edge.when.strip() or edge.when.strip().lower() in _OTHERWISE]
+    specific = [
+        edge
+        for edge in edges
+        if edge.when.strip().lower() not in _OTHERWISE and edge.when.strip()
+    ]
+    fallback = [
+        edge
+        for edge in edges
+        if not edge.when.strip() or edge.when.strip().lower() in _OTHERWISE
+    ]
     for edge in specific:
         if _matches(edge.when, value):
             return edge
@@ -132,14 +145,18 @@ async def execute_workflow(
     steps: list[WorkflowStepTrace] = []
     loops: dict[tuple[str, str], int] = {}
     last_key = "input"
-    current = _single_edge(definition, next(node.id for node in definition.nodes if node.type == "start")).to_node
+    current = _single_edge(
+        definition, next(node.id for node in definition.nodes if node.type == "start")
+    ).to_node
 
     for _ in range(max(1, definition.max_steps)):
         node = nodes.get(current)
         if node is None:
             raise ServiceError("WORKFLOW_INVALID", f"Missing node '{current}'.", 400)
         if node.type == "end":
-            return WorkflowOutcome(output=state.get(last_key, ""), steps=steps, state=state)
+            return WorkflowOutcome(
+                output=state.get(last_key, ""), steps=steps, state=state
+            )
         if node.type == "agent":
             assert node.agent_id is not None
             text = render_template(node.input or "{{input}}", state)
@@ -209,3 +226,6 @@ async def execute_workflow(
         "The workflow reached the maximum number of steps.",
         400,
     )
+
+
+

@@ -97,3 +97,5 @@ export const FigureThumb: React.FC<{ claim: string; source: string }> = ({ claim
   );
 };
 
+
+

@@ -18,14 +18,22 @@ from agent_execution.schemas.runtime import (
     RuntimeManifest,
 )
 from agent_execution.schemas.threads import Channel, CreateThreadRequest, ExecutionType
-from agent_execution.services.conversation_memory_service import ConversationMemoryService
-from agent_execution.services.conversation_models import ConversationHistory, ConversationTurn, MemoryContext
+from agent_execution.services.conversation_memory_service import (
+    ConversationMemoryService,
+)
+from agent_execution.services.conversation_models import (
+    ConversationHistory,
+    ConversationTurn,
+    MemoryContext,
+)
 from agent_execution.services.deployment_service import hash_api_key
 from agent_execution.services.prompt_composition_service import PromptCompositionService
 from agent_execution.services.run_policy import pins_manifest, status_after_failure
 from agent_execution.schemas.runs import RunStatus
 from agent_execution.services.thread_service import ThreadService
-from agent_execution.infrastructure.conversation_store.memory_store import InMemoryConversationHistoryStore
+from agent_execution.infrastructure.conversation_store.memory_store import (
+    InMemoryConversationHistoryStore,
+)
 
 
 def _manifest(**kwargs) -> RuntimeManifest:
@@ -43,7 +51,11 @@ def _manifest(**kwargs) -> RuntimeManifest:
 
 
 def test_memory_service_requires_session():
-    settings = SimpleNamespace(conversation_max_turn_pairs=10, conversation_max_chars=8000, memory_cache_ttl_seconds=30)
+    settings = SimpleNamespace(
+        conversation_max_turn_pairs=10,
+        conversation_max_chars=8000,
+        memory_cache_ttl_seconds=30,
+    )
     service = ConversationMemoryService(settings, InMemoryConversationHistoryStore())
     with pytest.raises(ServiceError) as exc:
         service.validate_context(
@@ -54,7 +66,9 @@ def test_memory_service_requires_session():
 
 
 def test_history_trim_respects_turn_pairs_and_chars():
-    history = ConversationHistory(turns=[ConversationTurn("user", "x" * 50) for _ in range(8)])
+    history = ConversationHistory(
+        turns=[ConversationTurn("user", "x" * 50) for _ in range(8)]
+    )
     trimmed, truncated = history.trim(max_turn_pairs=2, max_chars=100_000)
     assert len(trimmed.turns) == 4
     assert truncated is True
@@ -65,15 +79,42 @@ def test_history_trim_respects_turn_pairs_and_chars():
 
 def test_route_after_llm():
     assert route_after_llm({"has_tools": False}) == "persist_memory"
-    assert route_after_llm({"has_tools": True, "tool_calls": [], "tool_round": 0}) == "persist_memory"
-    assert route_after_llm({"has_tools": True, "tool_calls": [{}], "tool_round": 1, "max_tool_rounds": 5}) == "run_tools"
-    assert route_after_llm({"has_tools": True, "tool_calls": [{}], "tool_round": 5, "max_tool_rounds": 5}) == "finalize_answer"
+    assert (
+        route_after_llm({"has_tools": True, "tool_calls": [], "tool_round": 0})
+        == "persist_memory"
+    )
+    assert (
+        route_after_llm(
+            {
+                "has_tools": True,
+                "tool_calls": [{}],
+                "tool_round": 1,
+                "max_tool_rounds": 5,
+            }
+        )
+        == "run_tools"
+    )
+    assert (
+        route_after_llm(
+            {
+                "has_tools": True,
+                "tool_calls": [{}],
+                "tool_round": 5,
+                "max_tool_rounds": 5,
+            }
+        )
+        == "finalize_answer"
+    )
 
 
 def test_prompt_includes_files_and_knowledge():
     manifest = _manifest(
         knowledge_bases=[
-            KnowledgeBaseRef(knowledge_base_id=uuid4(), knowledge_base_name="Policies", mode=KnowledgeBaseMode.CONTEXT)
+            KnowledgeBaseRef(
+                knowledge_base_id=uuid4(),
+                knowledge_base_name="Policies",
+                mode=KnowledgeBaseMode.CONTEXT,
+            )
         ]
     )
     prompt = PromptCompositionService.compose(
@@ -135,9 +176,15 @@ class _Manifests:
     def __init__(self, published: bool) -> None:
         self.published = published
 
-    async def resolve(self, agent_id, bearer_token, *, revision_id=None, published_only=False):
+    async def resolve(
+        self, agent_id, bearer_token, *, revision_id=None, published_only=False
+    ):
         if published_only and not self.published:
-            raise ServiceError("AGENT_NOT_PUBLISHED", "Production execution requires a published agent.", 400)
+            raise ServiceError(
+                "AGENT_NOT_PUBLISHED",
+                "Production execution requires a published agent.",
+                400,
+            )
         manifest = _manifest(status="Published" if self.published else "Draft")
         manifest.agent_id = agent_id
         return manifest
@@ -146,7 +193,9 @@ class _Manifests:
 @pytest.mark.asyncio
 async def test_studio_test_thread_does_not_snapshot_draft():
     repo = _Repo()
-    settings = SimpleNamespace(test_thread_ttl_hours=24, default_production_retention_policy="PERMANENT")
+    settings = SimpleNamespace(
+        test_thread_ttl_hours=24, default_production_retention_policy="PERMANENT"
+    )
     service = ThreadService(settings, repo, _Manifests(published=False))
     await service.create(
         uuid4(),
@@ -162,7 +211,9 @@ async def test_studio_test_thread_does_not_snapshot_draft():
 @pytest.mark.asyncio
 async def test_production_thread_rejects_unpublished_agent():
     service = ThreadService(
-        SimpleNamespace(test_thread_ttl_hours=24, default_production_retention_policy="PERMANENT"),
+        SimpleNamespace(
+            test_thread_ttl_hours=24, default_production_retention_policy="PERMANENT"
+        ),
         _Repo(),
         _Manifests(published=False),
     )
@@ -175,3 +226,6 @@ async def test_production_thread_rejects_unpublished_agent():
             triggered_by="builder",
         )
     assert exc.value.code == "AGENT_NOT_PUBLISHED"
+
+
+

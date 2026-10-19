@@ -63,7 +63,7 @@ const authSlice = createSlice({
           email?: string | null;
           status?: string | null;
           roleProfile?: string | null;
-          groups?: Record<string, string> | string[] | null;
+          groups?: Record<string, string> | string[] | string | null;
         };
       }>,
     ) => {
@@ -80,12 +80,19 @@ const authSlice = createSlice({
         status: user.status ?? null,
         roleProfile: user.roleProfile ?? null,
       };
-      if (user.groups && !Array.isArray(user.groups)) {
+      if (user.groups && typeof user.groups === 'object' && !Array.isArray(user.groups)) {
         state.groups = user.groups;
         state.groupIds = Object.keys(user.groups);
       } else if (Array.isArray(user.groups)) {
         state.groups = {};
-        state.groupIds = user.groups.map(String);
+        state.groupIds = user.groups.map(String).map((id) => id.trim()).filter(Boolean);
+        for (const id of state.groupIds) state.groups[id] = id;
+      } else if (typeof user.groups === 'string' && user.groups.trim()) {
+        // Some JWTs carry a single group id as a scalar claim rather than the
+        // { id: name } map returned by the auth API. Preserve that membership.
+        const ids = user.groups.split(/[,;]/).map((id) => id.trim()).filter(Boolean);
+        state.groups = Object.fromEntries(ids.map((id) => [id, id]));
+        state.groupIds = ids;
       } else {
         state.groups = {};
         state.groupIds = [];
@@ -114,3 +121,5 @@ const authSlice = createSlice({
 
 export const { loginSuccess, mergeGroupDirectory, refreshSuccess, logout } = authSlice.actions;
 export default authSlice.reducer;
+
+

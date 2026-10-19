@@ -30,3 +30,6 @@ def test_openai_tool_uses_manifest_input_schema():
     params = tools[0]["function"]["parameters"]
     assert params["required"] == ["symbol"]
     assert "symbol" in params["properties"]
+
+
+

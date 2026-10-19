@@ -300,7 +300,7 @@ async function executionFetch(path: string, init: RequestInit = {}) {
     },
   });
   const data = await parseBody(r);
-    if (r.status === 401) handleUnauthorized(sent);
+  if (r.status === 401) handleUnauthorized(sent);
   if (!r.ok) {
     const { message, code } = messageOf(r.status, data);
     throw new ExecutionApiError(message, r.status, code);
@@ -501,4 +501,6 @@ export const auditApi = {
       `/api/v1/agents/${encodeURIComponent(agentId)}/audit/runs/${encodeURIComponent(runId)}`,
     ) as Promise<AuditRunDetail>,
 };
+
+
 

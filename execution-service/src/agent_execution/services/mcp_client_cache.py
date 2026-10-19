@@ -105,3 +105,6 @@ class McpClientCache:
         for entry in list(self._entries.values()):
             await self._disconnect(entry.client)
         self._entries.clear()
+
+
+

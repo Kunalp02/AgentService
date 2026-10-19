@@ -5,27 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>CCIL AI Platform</title>
     <link rel="icon" href="./favicon.ico" />
-    <meta name="description" content="Enterprise AI Platform management console." />
+    <meta
+      name="description"
+      content="Enterprise AI Platform management console."
+    />
     <meta property="og:title" content="CCIL AI Platform" />
-    <meta property="og:description" content="Enterprise AI Platform management console." />
+    <meta
+      property="og:description"
+      content="Enterprise AI Platform management console."
+    />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
-    <script>
-      try {
-        var t = localStorage.getItem('ai_platform_theme');
-        document.documentElement.setAttribute('data-theme',
-          t === 'light' || t === 'enterprise' ? t : 'dark');
-        document.documentElement.setAttribute('data-palette', 'polaris');
-        localStorage.setItem('ai_platform_palette', 'polaris');
-      } catch (e) {
-        document.documentElement.setAttribute('data-theme', 'dark');
-        document.documentElement.setAttribute('data-palette', 'polaris');
-      }
-    </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
+
+
 

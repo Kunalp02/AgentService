@@ -34,3 +34,6 @@ class HealthController(ApiController):
             logger.exception("readiness.failed")
             raise ServiceError("NOT_READY", "Database is unavailable.", 503) from exc
         return {"status": "ok"}
+
+
+
