@@ -36,3 +36,6 @@ class ModelCache:
         payload = await fetch(model_id, bearer_token)
         self.set(model_id, payload)
         return payload
+
+
+

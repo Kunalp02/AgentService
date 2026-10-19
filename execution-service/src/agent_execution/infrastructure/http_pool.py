@@ -64,3 +64,6 @@ class HttpClientPool:
         await self.auth.aclose()
         await self.rag_ask.aclose()
         await self.local_tools.aclose()
+
+
+

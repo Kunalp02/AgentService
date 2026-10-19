@@ -22,8 +22,7 @@ class PromptCompositionService:
             sections.append(
                 "Retrieved knowledge base context:\n"
                 "Use this context when it answers the user. "
-                "If it does not contain the answer, say so.\n"
-                + "\n\n".join(kb_blocks)
+                "If it does not contain the answer, say so.\n" + "\n\n".join(kb_blocks)
             )
         if artifact_block:
             sections.append(artifact_block)
@@ -69,7 +68,9 @@ class PromptCompositionService:
                 # is shortened from the end so the top of the evidence still reaches the model.
                 overflow = len(composed()) + len(user_input) - budget_chars
                 last = knowledge[-1]
-                if len(last) > 400 and (len(knowledge) == 1 or len(last) > overflow + 80):
+                if len(last) > 400 and (
+                    len(knowledge) == 1 or len(last) > overflow + 80
+                ):
                     keep = max(400, len(last) - overflow - 32)
                     if keep < len(last):
                         knowledge[-1] = last[:keep].rstrip() + "\n…[truncated]"
@@ -103,3 +104,6 @@ class PromptCompositionService:
 def _add_trace(traces: list[str], step: str) -> None:
     if step not in traces:
         traces.append(step)
+
+
+

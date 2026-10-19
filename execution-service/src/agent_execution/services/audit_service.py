@@ -65,3 +65,6 @@ class AuditService:
         data["retrieved_context"] = _json(data["retrieved_context"], [])
         data["tool_calls"] = _json(data["tool_calls"], [])
         return AuditRunDetail(**data)
+
+
+

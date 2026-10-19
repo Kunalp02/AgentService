@@ -1,9 +1,12 @@
 from uuid import uuid4
-
 import pytest
 
 from agent_execution.core.exceptions import ServiceError
-from agent_execution.schemas.workflows import WorkflowDefinition, WorkflowEdge, WorkflowNode
+from agent_execution.schemas.workflows import (
+    WorkflowDefinition,
+    WorkflowEdge,
+    WorkflowNode,
+)
 from agent_execution.services.workflow_engine import (
     WorkflowRunError,
     execute_workflow,
@@ -11,8 +14,12 @@ from agent_execution.services.workflow_engine import (
 )
 
 
-def _agent(node_id: str, agent_id, output: str, template: str = "{{input}}") -> WorkflowNode:
-    return WorkflowNode(id=node_id, type="agent", agentId=agent_id, input=template, output=output)
+def _agent(
+    node_id: str, agent_id, output: str, template: str = "{{input}}"
+) -> WorkflowNode:
+    return WorkflowNode(
+        id=node_id, type="agent", agentId=agent_id, input=template, output=output
+    )
 
 
 @pytest.mark.asyncio
@@ -67,8 +74,17 @@ async def test_condition_loops_back_until_approved():
         edges=[
             WorkflowEdge(**{"from": "start", "to": "reviewer"}),
             WorkflowEdge(**{"from": "reviewer", "to": "check"}),
-            WorkflowEdge(**{"from": "check", "to": "done", "when": "contains approved"}),
-            WorkflowEdge(**{"from": "check", "to": "reviewer", "when": "otherwise", "maxLoops": 3}),
+            WorkflowEdge(
+                **{"from": "check", "to": "done", "when": "contains approved"}
+            ),
+            WorkflowEdge(
+                **{
+                    "from": "check",
+                    "to": "reviewer",
+                    "when": "otherwise",
+                    "maxLoops": 3,
+                }
+            ),
         ],
     )
     state = {"input": "question"}
@@ -99,13 +115,22 @@ async def test_loop_limit_stops_a_reject_cycle():
             WorkflowEdge(**{"from": "start", "to": "reviewer"}),
             WorkflowEdge(**{"from": "reviewer", "to": "check"}),
             WorkflowEdge(**{"from": "check", "to": "end", "when": "contains approved"}),
-            WorkflowEdge(**{"from": "check", "to": "reviewer", "when": "otherwise", "maxLoops": 2}),
+            WorkflowEdge(
+                **{
+                    "from": "check",
+                    "to": "reviewer",
+                    "when": "otherwise",
+                    "maxLoops": 2,
+                }
+            ),
         ],
     )
     with pytest.raises(WorkflowRunError) as caught:
         await execute_workflow(definition, "question", run_agent)
     assert caught.value.code == "WORKFLOW_LIMIT"
-    assert any(step.status == "failed" or step.type == "agent" for step in caught.value.steps)
+    assert any(
+        step.status == "failed" or step.type == "agent" for step in caught.value.steps
+    )
 
 
 def test_render_leaves_unknown_tokens_empty():
@@ -128,3 +153,5 @@ def test_publish_validation_requires_an_agent():
 
     with pytest.raises(ServiceError):
         validate_definition(definition, for_run=True)
+
+

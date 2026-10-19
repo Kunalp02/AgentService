@@ -78,9 +78,7 @@ def remote_manifest() -> RuntimeManifest:
 async def test_remote_tool_uses_fastmcp_cache(remote_manifest: RuntimeManifest):
     cache = _DummyMcpCache()
     settings = SimpleNamespace(local_mcp_url="")
-    service = ToolExecutionService(
-        _DummyPlatform(), settings, cache, local_client=SimpleNamespace()
-    )  # type: ignore[arg-type]
+    service = ToolExecutionService(_DummyPlatform(), settings, cache)  # type: ignore[arg-type]
 
     result_json = await service.run(
         remote_manifest,
@@ -112,3 +110,6 @@ def test_mcp_connection_cache_key_changes_with_credentials():
         api_key="x",
     )
     assert cache.connection_cache_key(base) != cache.connection_cache_key(other)
+
+
+

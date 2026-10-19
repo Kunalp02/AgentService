@@ -820,3 +820,5 @@ const openEditModel = (model: ModelRegistryDto) => {
     </div>
   );
 };
+
+

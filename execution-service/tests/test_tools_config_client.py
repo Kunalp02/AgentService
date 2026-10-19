@@ -76,3 +76,6 @@ async def test_get_server_for_use(tools_client: ToolsConfigClient) -> None:
     assert isinstance(data, dict)
     assert data["id"] == "test-id"
     assert data["tools"] == []
+
+
+

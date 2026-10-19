@@ -61,3 +61,6 @@ class ConversationHistory:
             if role in ("user", "assistant") and content is not None:
                 turns.append(ConversationTurn(role, content))
         return cls(turns=turns)
+
+
+

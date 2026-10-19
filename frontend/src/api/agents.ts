@@ -59,6 +59,7 @@ export const agentsApi = {
     search?: string,
     status?: string,
     groupId?: string,
+    groupIds?: string[],
   ) => {
     const q = new URLSearchParams({
       Page: String(page),
@@ -67,6 +68,11 @@ export const agentsApi = {
     if (search) q.set("Search", search);
     if (status) q.set("Status", status);
     if (groupId) q.set("GroupId", groupId);
+    // Agent OpenAPI contract supports multiple groups. Existing callers that
+    // pass only groupId remain compatible.
+    for (const id of groupIds ?? []) {
+      if (id) q.append("GroupIds", id);
+    }
     return request<PagedResult<AgentListItemDto>>(`?${q.toString()}`);
   },
 
@@ -103,4 +109,6 @@ export const agentsApi = {
   unpublishAgent: (id: string) =>
     request<AgentDto>(`/${id}/unpublish`, { method: "POST" }),
 };
+
+
 

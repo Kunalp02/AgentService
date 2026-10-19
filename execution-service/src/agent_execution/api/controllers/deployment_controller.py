@@ -59,3 +59,6 @@ class DeploymentController(ApiController):
         return await service.rotate(
             agent_id, deployment_id, token, str(request.base_url)
         )
+
+
+

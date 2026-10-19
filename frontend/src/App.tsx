@@ -12,7 +12,7 @@ import { AgentStudioView } from "./components/agents/AgentStudioView";
 import { PlaygroundView } from "./components/playground/PlaygroundView";
 import { AuditLogsView } from "./components/audit/AuditLogsView";
 import { GatewayModelRegistryView } from "./components/gateway/GatewayModelRegistryView";
-import WorkflowView from "./components/workflow/WorkflowView";
+import { ApiKeyManagementView } from "./components/api-keys/ApiKeyManagementView";
 
 const MainContent: React.FC = () => {
   const {
@@ -22,7 +22,6 @@ const MainContent: React.FC = () => {
     canAccessView,
     setActiveView,
     sessionRestoring,
-    permissions,
   } = usePlatform();
 
   const fallbackOrder = [
@@ -32,23 +31,22 @@ const MainContent: React.FC = () => {
     "tools",
     "knowledge",
     "agents",
-    "workflow",
     "model-registry",
     "playground",
+    "api-keys",
   ];
   const effectiveView = canAccessView(activeView)
     ? activeView
     : (fallbackOrder.find((v) => canAccessView(v)) ?? null);
 
   useEffect(() => {
-    if (sessionRestoring || !isAuthenticated || !permissions.length) return;
+    if (sessionRestoring || !isAuthenticated) return;
     if (effectiveView && effectiveView !== activeView)
       setActiveView(effectiveView);
   }, [
     activeView,
     effectiveView,
     isAuthenticated,
-    permissions.length,
     sessionRestoring,
     setActiveView,
   ]);
@@ -102,8 +100,8 @@ const MainContent: React.FC = () => {
         return <AuditLogsView />;
       case "model-registry":
         return <GatewayModelRegistryView />;
-      case "workflow":
-        return <WorkflowView />;
+      case "api-keys":
+        return <ApiKeyManagementView />;
       default:
         return <DashboardView />;
     }
@@ -135,4 +133,6 @@ export default function App() {
     </PlatformProvider>
   );
 }
+
+
 

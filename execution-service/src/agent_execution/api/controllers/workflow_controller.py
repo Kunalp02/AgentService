@@ -24,13 +24,37 @@ from platform_auth import PlatformPrincipal
 
 class WorkflowController(ApiController):
     def register(self, router: APIRouter) -> None:
-        router.post("/workflows", response_model=WorkflowDocument, tags=["workflows"])(self.create)
-        router.get("/workflows", response_model=list[WorkflowSummary], tags=["workflows"])(self.list_workflows)
-        router.get("/workflows/{workflow_id}", response_model=WorkflowDocument, tags=["workflows"])(self.get)
-        router.put("/workflows/{workflow_id}", response_model=WorkflowDocument, tags=["workflows"])(self.update)
-        router.post("/workflows/{workflow_id}/publish", response_model=WorkflowDocument, tags=["workflows"])(self.publish)
-        router.post("/workflows/{workflow_id}/unpublish", response_model=WorkflowDocument, tags=["workflows"])(self.unpublish)
-        router.post("/workflows/{workflow_id}/runs", response_model=WorkflowRunResponse, tags=["workflows"])(self.run)
+        router.post("/workflows", response_model=WorkflowDocument, tags=["workflows"])(
+            self.create
+        )
+        router.get(
+            "/workflows", response_model=list[WorkflowSummary], tags=["workflows"]
+        )(self.list_workflows)
+        router.get(
+            "/workflows/{workflow_id}",
+            response_model=WorkflowDocument,
+            tags=["workflows"],
+        )(self.get)
+        router.put(
+            "/workflows/{workflow_id}",
+            response_model=WorkflowDocument,
+            tags=["workflows"],
+        )(self.update)
+        router.post(
+            "/workflows/{workflow_id}/publish",
+            response_model=WorkflowDocument,
+            tags=["workflows"],
+        )(self.publish)
+        router.post(
+            "/workflows/{workflow_id}/unpublish",
+            response_model=WorkflowDocument,
+            tags=["workflows"],
+        )(self.unpublish)
+        router.post(
+            "/workflows/{workflow_id}/runs",
+            response_model=WorkflowRunResponse,
+            tags=["workflows"],
+        )(self.run)
 
     async def create(
         self,
@@ -90,3 +114,6 @@ class WorkflowController(ApiController):
     ) -> WorkflowRunResponse:
         triggered_by = principal.username or principal.user_id or principal.subject
         return await service.run(workflow_id, body, token, triggered_by)
+
+
+

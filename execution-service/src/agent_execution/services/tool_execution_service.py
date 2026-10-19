@@ -95,3 +95,6 @@ class ToolExecutionService:
         if isinstance(res.result, str):
             return res.result
         return json.dumps(res.result, ensure_ascii=True, default=str)
+
+
+

@@ -27,3 +27,6 @@ def test_manifest_limits_override_settings():
     assert policy.max_turn_pairs == 4
     assert policy.max_history_chars == 3000
     assert "Be concise" in (policy.instructions_block() or "")
+
+
+

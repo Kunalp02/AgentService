@@ -269,13 +269,9 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
   const [activeViewState, setActiveViewState] = useState("tools");
   const [notification, setNotification] = useState<string | null>(null);
   const [theme, setThemeState] = useState<"light" | "dark" | "enterprise">(
-    () => {
-      const savedTheme = localStorage.getItem("ai_platform_theme");
-      return savedTheme === "light" || savedTheme === "enterprise"
-        ? savedTheme
-        : "dark";
-    },
+    () => (localStorage.getItem("ai_platform_theme") as any) || "dark",
   );
+
   const showNotification = useCallback((message: string) => {
     setNotification(message);
     window.setTimeout(() => setNotification(null), 4000);
@@ -317,8 +313,6 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
           return PERMISSIONS.Users.View;
         case "dashboard":
           return null;
-        case "workflow":
-          return PERMISSIONS.Agent.View;
         default:
           return null;
       }
@@ -330,6 +324,10 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
     (view: string) => {
       if (!currentUser || normalizeStatus(currentUser.status) !== "active")
         return false;
+      // API Key Management deliberately has no role-profile permission code yet.
+      // Any active platform user may open the screen; its resource pickers are
+      // still limited by the existing per-resource View permissions and groups.
+      if (view === "api-keys") return true;
       if (view === "dashboard") {
         return (
           hasPermission(PERMISSIONS.Users.View) &&
@@ -469,8 +467,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
       } else if (
         view === "agents" ||
         view === "playground" ||
-        view === "audit" ||
-        view === "workflow"
+        view === "audit"
       ) {
         if (hasPermission(PERMISSIONS.Agent.View)) {
           tasks.push(
@@ -563,6 +560,17 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
             ? tokenPermissions
             : userPermissions;
         const user = response.user;
+        // The auth OpenAPI response normally carries groups as an id->name map,
+        // while some JWTs carry `groups` as a single string claim. Prefer the
+        // API's named memberships, falling back to token memberships if absent.
+        const responseGroups = userGroupEntries(user.groups);
+        const tokenGroups = userGroupEntries(tokenClaims?.groups);
+        const groupSource =
+          responseGroups.length > 0
+            ? user.groups
+            : tokenGroups.length > 0
+              ? tokenClaims.groups
+              : user.groups;
 
         dispatch(
           loginSuccess({
@@ -576,14 +584,13 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
               email: user.email,
               status: user.status,
               roleProfile: user.roleProfile,
-              groups: user.groups,
+              groups: groupSource,
             },
           }),
         );
-        // Non-admin users get only their own groups from the login response.
-        // An admin with Group.View may subsequently replace this with the full
-        // directory through refetchGroups().
-        setGroups(groupsFromClaim(user.groups));
+        // Keep the caller's actual memberships separate from any admin group
+        // directory data loaded later for display labels.
+        setGroups(groupsFromClaim(groupSource));
 
         const firstView = firstViewForPermissions(nextPermissions);
         setActiveViewState(firstView);
@@ -715,14 +722,6 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
     setThemeState(theme);
     localStorage.setItem("ai_platform_theme", theme);
   };
-  useEffect(() => {
-    const root = document.documentElement;
-    root.setAttribute('data-theme', theme);
-    root.setAttribute('data-palette', 'polaris');
-    localStorage.setItem('ai_platform_palette', 'polaris');
-    root.style.colorScheme = theme === 'light' ? 'light' : 'dark';
-  }, [theme]);
-
 
   const value: PlatformContextType = {
     currentUser,
@@ -796,4 +795,6 @@ export const usePlatform = () => {
     throw new Error("usePlatform must be used within a PlatformProvider");
   return context;
 };
+
+
 

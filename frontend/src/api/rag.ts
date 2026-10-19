@@ -21,3 +21,5 @@ export const ragApi = {
   deleteDocument: (docId:string) => request<void>(`/documents/${encodeURIComponent(docId)}`,{method:'DELETE'}),
   getKnowledgeBase: (kbId:string) => request<any>(`/knowledge-bases/${encodeURIComponent(kbId)}`),
 };
+
+

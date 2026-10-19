@@ -12,3 +12,5 @@ export const roleAttributesApi = {
   list: (module?: string) => authApiClient.get<RoleAttributeDto[]>(`/api/v1/role-attributes${module ? `?module=${encodeURIComponent(module)}` : ''}`),
   create: (payload: CreateRoleAttributeRequest) => authApiClient.post<RoleAttributeDto>('/api/v1/role-attributes', payload),
 };
+
+

@@ -42,3 +42,5 @@ class AuditRunDetail(AuditRunItem):
     tool_calls: list[dict[str, Any]] = Field(default_factory=list, alias="toolCalls")
     manifest_hash: str = Field(default="", alias="manifestHash")
     revision_id: UUID | None = Field(default=None, alias="revisionId")
+
+

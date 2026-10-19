@@ -11,3 +11,6 @@ class ApiController:
 
     def register(self, router: APIRouter) -> None:
         raise NotImplementedError
+
+
+

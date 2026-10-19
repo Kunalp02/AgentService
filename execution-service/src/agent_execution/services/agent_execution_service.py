@@ -398,7 +398,8 @@ class AgentExecutionService:
             "run_id": str(run_id),
             "execution_type": thread["execution_type"],
             "input_artifact_ids": [str(item) for item in request.input_artifact_ids],
-            "session_id": (request.session_id or "").strip() or str(thread["thread_id"]),
+            "session_id": (request.session_id or "").strip()
+            or str(thread["thread_id"]),
             "org_id": request.org_id,
             "bearer_token": bearer_token,
             "manifest": manifest.model_dump(mode="json"),
@@ -511,3 +512,6 @@ def _str_list(value) -> list[str]:
     if isinstance(value, str):
         value = json.loads(value)
     return [str(item) for item in value or []]
+
+
+
