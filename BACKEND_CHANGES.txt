@@ -1,193 +1,957 @@
-================================================================================
-BACKEND CHANGES ONLY (AgentService monorepo)
-================================================================================
-Summary of backend updates merged to main (platform-auth removal + execution
-service CCIL middleware + storage auth inlining). Frontend changes are NOT
-included here.
+BACKEND COPY-PASTE GUIDE
+=========================
+Apply in order. Paths are relative to AgentService repo root.
 
-================================================================================
-PART A — REMOVED: platform-auth library
-================================================================================
-
-DELETED (entire folder — do not use anymore):
+STEP 0 — DELETE (remove whole folder)
+-------------------------------------
   platform-auth/
-    pyproject.toml
-    src/platform_auth/__init__.py
-    src/platform_auth/principal.py
-    src/platform_auth/verifier.py
-    tests/test_verifier.py
 
-WHAT TO DO:
-  - Stop installing: pip install ./platform-auth
-  - Stop copying platform-auth in Docker builds
-  - Use in-service auth modules below instead
+STEP 0b — CREATE EMPTY FOLDER (optional)
+-------------------------------------
+  execution-service/wheels/   (put .whl files here later)
+
+STEP 0c — NEW FILE: execution-service/ai-platform-config.yml
+-------------------------------------
+  Copy from execution-service/ai-platform-config.yml.example
+  Fill Redis/JWT values from platform team.
+
+STEP 0d — execution-service/.env (add these lines)
+-------------------------------------
+AUTH_MIDDLEWARE_ENABLED=true
+AI_PLATFORM_CONFIG_FILE=ai-platform-config.yml
+
+STEP 0e — Install wheels (from execution-service folder)
+-------------------------------------
+py -m pip install --find-links "./wheels" ccil-webapi-middleware-fastapi==1.2.0 ccil-webapi-middleware==2.1.0 ccil-cache-redis==1.1.0
+py -m ccil_webapi_middleware
+
 
 ================================================================================
-PART B — execution-service
+FILE: execution-service/src/agent_execution/guard.py
+ACTION: REPLACE ENTIRE FILE
 ================================================================================
+"""Routes excluded from ccil_webapi_middleware_fastapi JWT protection."""
 
---------------------------------------------------------------------------------
-B1. Dependencies
---------------------------------------------------------------------------------
-FILE: execution-service/pyproject.toml
+from __future__ import annotations
 
-CHANGES:
-  - Removed dependency: ccil-platform-auth
-  - Added optional extra [platform-auth] for CCIL wheels (install from local wheels):
-      ccil-webapi-middleware-fastapi==1.2.0
-      ccil-webapi-middleware==2.1.0
-      ccil-cache-redis==1.1.0
+# OpenAPI / Swagger
+PUBLIC: list[str] = [
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+]
 
-WHAT TO DO:
-  cd execution-service
-  pip install -e .
-  # When you have wheel files:
-  pip install --find-links "./wheels" -e ".[platform-auth]"
+# Kubernetes probes (router prefix is /api/v1)
+PUBLIC.extend(
+    [
+        "/api/v1/health/live",
+        "/api/v1/health/ready",
+    ]
+)
 
---------------------------------------------------------------------------------
-B2. Docker
---------------------------------------------------------------------------------
+# Published agent APIs: validated with X-Api-Key in invoke_controller handlers,
+# not with platform JWT at the middleware layer.
+PUBLIC_API_KEY_ROUTE_PATTERNS: list[str] = [
+    "/api/v1/invoke*",
+    "/api/v1/agents/*/execute",
+]
+
+================================================================================
+FILE: execution-service/src/agent_execution/main.py
+ACTION: REPLACE ENTIRE FILE
+================================================================================
+from __future__ import annotations
+
+import logging
+import os
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import uvicorn
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from agent_execution.api.exception_handlers import register_exception_handlers
+from agent_execution.api.middleware import RequestContextMiddleware
+from agent_execution.api.router import create_api_router
+from agent_execution.core.container import get_container, shutdown_container
+from agent_execution.guard import PUBLIC, PUBLIC_API_KEY_ROUTE_PATTERNS
+from agent_execution.logging_config import configure_logging, uvicorn_log_config
+from agent_execution.settings import get_settings
+
+os.environ.pop("SSL_CERT_FILE", None)
+logger = logging.getLogger(__name__)
+
+_SERVICE_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _configure_platform_auth_config() -> None:
+    """Point the middleware package at ai-platform-config.yml when enabled."""
+    settings = get_settings()
+    if not settings.auth_middleware_enabled:
+        return
+    config_path = _SERVICE_ROOT / settings.ai_platform_config_file
+    os.environ.setdefault("AI_PLATFORM_CONFIG", str(config_path.resolve()))
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    settings = get_settings()
+    logger.info("Execution service starting")
+    container = get_container(settings)
+    await container.database.ping()
+    logger.info("Execution database is ready")
+    yield
+    logger.info("Execution service stopping")
+    await shutdown_container()
+
+
+def _apply_auth_middleware(app: FastAPI) -> None:
+    settings = get_settings()
+    if not settings.auth_middleware_enabled:
+        logger.info("Platform auth middleware disabled (set AUTH_MIDDLEWARE_ENABLED=true)")
+        return
+    try:
+        from ccil_webapi_middleware_fastapi import FastAPIAuth
+    except ImportError as exc:
+        raise RuntimeError(
+            "AUTH_MIDDLEWARE_ENABLED is true but ccil_webapi_middleware_fastapi is not "
+            "installed. See execution-service/PLATFORM_AUTH_MIDDLEWARE.md."
+        ) from exc
+
+    _configure_platform_auth_config()
+    FastAPIAuth().protect(
+        app,
+        public=[*PUBLIC, *PUBLIC_API_KEY_ROUTE_PATTERNS],
+    )
+    logger.info("Platform auth middleware enabled")
+
+
+def create_app() -> FastAPI:
+    settings = get_settings()
+    configure_logging(settings.log_level, settings.log_format)
+    app = FastAPI(
+        title="Agent Execution Service",
+        version="4.0.0",
+        description="Thread and run runtime for studio test and published agent APIs.",
+        lifespan=lifespan,
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origin_list(),
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.add_middleware(RequestContextMiddleware)
+    register_exception_handlers(app)
+    app.include_router(create_api_router())
+    _apply_auth_middleware(app)
+    return app
+
+
+app = create_app()
+
+
+def main() -> None:
+    settings = get_settings()
+    configure_logging(settings.log_level, settings.log_format)
+    uvicorn.run(
+        "agent_execution.main:app",
+        host=settings.host,
+        port=settings.port,
+        reload=False,
+        log_level=settings.log_level,
+        log_config=uvicorn_log_config(settings.log_level, settings.log_format),
+    )
+
+
+if __name__ == "__main__":
+    main()
+
+================================================================================
+FILE: execution-service/src/agent_execution/infrastructure/auth/__init__.py
+ACTION: REPLACE ENTIRE FILE
+================================================================================
+"""Inbound bearer-token authentication and outbound service-account tokens."""
+
+from agent_execution.infrastructure.auth.principal import PlatformPrincipal, parse_codes
+from agent_execution.infrastructure.auth.verifier import AuthError, PlatformTokenVerifier
+
+__all__ = [
+    "AuthError",
+    "PlatformPrincipal",
+    "PlatformTokenVerifier",
+    "parse_codes",
+]
+
+================================================================================
+FILE: execution-service/src/agent_execution/infrastructure/auth/principal.py
+ACTION: REPLACE ENTIRE FILE
+================================================================================
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+def parse_codes(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    raw_parts: list[str]
+    if isinstance(value, str):
+        raw_parts = [value]
+    elif isinstance(value, (list, tuple, set)):
+        raw_parts = [str(item) for item in value]
+    else:
+        raw_parts = [str(value)]
+    codes: list[str] = []
+    for part in raw_parts:
+        for piece in part.split(","):
+            code = piece.strip()
+            if code and code not in codes:
+                codes.append(code)
+    return tuple(codes)
+
+
+@dataclass(frozen=True, slots=True)
+class PlatformPrincipal:
+    token: str
+    subject: str
+    username: str
+    user_id: str
+    groups: tuple[str, ...]
+    permissions: tuple[str, ...]
+
+    def has_all(self, required: tuple[str, ...]) -> bool:
+        if not required:
+            return True
+        owned = set(self.permissions)
+        return all(code in owned for code in required)
+
+================================================================================
+FILE: execution-service/src/agent_execution/infrastructure/auth/verifier.py
+ACTION: REPLACE ENTIRE FILE
+================================================================================
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import logging
+import time
+from dataclasses import dataclass
+
+import httpx
+
+from agent_execution.infrastructure.auth.principal import PlatformPrincipal, parse_codes
+
+logger = logging.getLogger(__name__)
+
+_NAME_URI = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name"
+_NAME_ID_URI = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"
+_ROLE_URI = "http://schemas.microsoft.com/ws/2008/06/identity/claims/role"
+
+_USERNAME_CLAIMS = ("unique_name", "preferred_username", "username", "name", "tokenkey", _NAME_URI)
+_SUBJECT_CLAIMS = ("sub", "nameid", "userid", "user_id", _NAME_ID_URI)
+_PERMISSION_CLAIMS = ("roles", "role", "permissions", "category", _ROLE_URI)
+
+
+class AuthError(Exception):
+    def __init__(self, code: str, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+
+
+@dataclass(slots=True)
+class _CacheEntry:
+    expires_at: float
+    principal: PlatformPrincipal
+
+
+class PlatformTokenVerifier:
+    """Read the caller identity from the platform JWT payload."""
+
+    def __init__(
+        self,
+        *,
+        configured: bool = True,
+        me_path: str = "/api/v1/auth/me",
+        cache_ttl_seconds: int = 0,
+        required_permissions: tuple[str, ...] = (),
+        base_url: str = "",
+        verify_ssl: bool = True,
+        timeout_seconds: float = 10.0,
+        http: httpx.AsyncClient | None = None,
+    ) -> None:
+        del configured, me_path, base_url, verify_ssl, timeout_seconds
+        self._cache_ttl_seconds = max(cache_ttl_seconds, 0)
+        self._required_permissions = required_permissions
+        self._owns_http = http is None
+        self._http = http
+        self._cache: dict[str, _CacheEntry] = {}
+
+    async def aclose(self) -> None:
+        if self._owns_http and self._http is not None:
+            await self._http.aclose()
+
+    async def authenticate(self, authorization: str | None) -> PlatformPrincipal:
+        token = _bearer(authorization)
+        if not token:
+            raise AuthError("UNAUTHORIZED", "Authorization bearer token is required.", 401)
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        cached = self._cached(digest)
+        if cached is not None:
+            return cached
+        principal = _principal_from_token(token)
+        if not principal.has_all(self._required_permissions):
+            logger.info(
+                "auth.forbidden user=%s",
+                principal.username or principal.subject or principal.user_id,
+            )
+            raise AuthError("FORBIDDEN", "Caller is missing a required platform permission.", 403)
+        logger.info(
+            "auth.accepted user=%s",
+            principal.username or principal.subject or principal.user_id,
+        )
+        if self._cache_ttl_seconds:
+            self._cache[digest] = _CacheEntry(time.monotonic() + self._cache_ttl_seconds, principal)
+        return principal
+
+    def _cached(self, digest: str) -> PlatformPrincipal | None:
+        entry = self._cache.get(digest)
+        if entry is None:
+            return None
+        if entry.expires_at <= time.monotonic():
+            self._cache.pop(digest, None)
+            return None
+        return entry.principal
+
+
+def _bearer(authorization: str | None) -> str:
+    if not authorization:
+        return ""
+    value = authorization.strip()
+    if value.lower().startswith("bearer "):
+        value = value[7:].strip()
+    return value
+
+
+def _principal_from_token(token: str) -> PlatformPrincipal:
+    claims = _claims(token)
+    _reject_if_expired(claims)
+    username = _first(claims, _USERNAME_CLAIMS)
+    subject = _first(claims, _SUBJECT_CLAIMS)
+    user_id = _first(claims, ("userid", "user_id", "nameid", "sub", _NAME_ID_URI)) or subject
+    permissions = ()
+    for key in _PERMISSION_CLAIMS:
+        permissions = parse_codes(_claim(claims, key))
+        if permissions:
+            break
+    return PlatformPrincipal(
+        token=token,
+        subject=subject,
+        username=username,
+        user_id=user_id,
+        groups=parse_codes(_claim(claims, "groups")),
+        permissions=permissions,
+    )
+
+
+def _claims(token: str) -> dict:
+    parts = token.split(".")
+    if len(parts) < 2 or not parts[1]:
+        raise AuthError("UNAUTHORIZED", "Platform token could not be read.", 401)
+    padded = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+    except (ValueError, UnicodeError) as exc:
+        raise AuthError("UNAUTHORIZED", "Platform token could not be read.", 401) from exc
+    if not isinstance(payload, dict):
+        raise AuthError("UNAUTHORIZED", "Platform token could not be read.", 401)
+    return payload
+
+
+def _reject_if_expired(claims: dict) -> None:
+    raw = _claim(claims, "exp")
+    if raw in (None, ""):
+        return
+    try:
+        expires_at = float(raw)
+    except (TypeError, ValueError):
+        return
+    if expires_at <= time.time():
+        raise AuthError("UNAUTHORIZED", "Platform token has expired.", 401)
+
+
+def _claim(claims: dict, name: str):
+    for key, value in claims.items():
+        if str(key).lower() == name.lower():
+            return value
+    return None
+
+
+def _first(claims: dict, names: tuple[str, ...]) -> str:
+    for name in names:
+        value = _claim(claims, name)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+================================================================================
+FILE: execution-service/ai-platform-config.yml.example
+ACTION: REPLACE ENTIRE FILE
+================================================================================
+# Copy to ai-platform-config.yml next to this file (execution-service root).
+# Fill in values from your platform team. Verify with:
+#   py -m ccil_webapi_middleware
+# (run from the execution-service directory)
+
+jwt:
+  issuer: "https://www.ccilonline.co.in"
+  validateLifetime: true
+  validateSession: true
+
+  jwtCache:
+    RedisConnectionString: "HOST:PORT"
+    RedisCacheId: "1"
+    JWTKey: "JWTSecretKey"
+
+  sessionCache:
+    RedisConnectionString: "HOST:PORT"
+    RedisCacheId: "2"
+
+================================================================================
 FILE: execution-service/Dockerfile
-
-CHANGES:
-  - Removed: COPY platform-auth + pip install platform-auth
-  - Added: COPY ai-platform-config.yml.example
-  - Commented pattern for optional COPY wheels/*.whl before pip install .
-
-WHAT TO DO:
-  - Build from repo root as before
-  - For production auth middleware: copy .whl into execution-service/wheels/ and
-    uncomment wheel install lines in Dockerfile if you use container builds
-
---------------------------------------------------------------------------------
-B3. JWT caller auth (replaces platform-auth package)
---------------------------------------------------------------------------------
-FILES (NEW / UPDATED):
-  execution-service/src/agent_execution/infrastructure/auth/__init__.py
-  execution-service/src/agent_execution/infrastructure/auth/principal.py
-  execution-service/src/agent_execution/infrastructure/auth/verifier.py
-
-CHANGES:
-  - PlatformPrincipal, parse_codes, AuthError, PlatformTokenVerifier moved here
-  - Verifier reads JWT payload (claims) locally; checks exp and permissions
-
-IMPORTS UPDATED (platform_auth -> agent_execution.infrastructure.auth):
-  execution-service/src/agent_execution/api/dependencies.py
-  execution-service/src/agent_execution/core/container.py
-  execution-service/src/agent_execution/api/controllers/thread_controller.py
-  execution-service/src/agent_execution/api/controllers/workflow_controller.py
-
-WHAT TO DO:
-  - No separate platform-auth install
-  - Route handlers still use Depends(get_platform_principal) / get_bearer_token
-    for studio APIs (token must be present; full validation when middleware on)
-
---------------------------------------------------------------------------------
-B4. CCIL FastAPI middleware (ccil_webapi_middleware_fastapi)
---------------------------------------------------------------------------------
-FILES:
-  execution-service/src/agent_execution/main.py          (UPDATED)
-  execution-service/src/agent_execution/guard.py         (NEW)
-  execution-service/src/agent_execution/settings.py      (UPDATED)
-  execution-service/ai-platform-config.yml.example       (NEW)
-  execution-service/PLATFORM_AUTH_MIDDLEWARE.md          (NEW — full runbook)
-  execution-service/wheels/.gitkeep                      (NEW — drop .whl here)
-
-main.py CHANGES:
-  - After app.include_router(create_api_router()):
-      FastAPIAuth().protect(app, public=[...]) when middleware enabled
-  - No x-service-key skip on middleware
-  - Sets AI_PLATFORM_CONFIG env to path of ai-platform-config.yml when enabled
-
-guard.py CHANGES:
-  - PUBLIC: /docs, /openapi.json, /redoc, /api/v1/health/live, /api/v1/health/ready
-  - PUBLIC_API_KEY_ROUTE_PATTERNS (no JWT at middleware; X-Api-Key in handlers):
-      /api/v1/invoke*
-      /api/v1/agents/*/execute
-
-settings.py NEW FIELDS (.env):
-  AUTH_MIDDLEWARE_ENABLED=false          # set true after wheels + config
-  AI_PLATFORM_CONFIG_FILE=ai-platform-config.yml
-
-AUTH MODEL (execution service):
-  | Routes                                      | Auth at edge              |
-  |---------------------------------------------|---------------------------|
-  | threads, runs, deployments, audit, workflow | Bearer JWT (middleware)   |
-  | /api/v1/invoke/*                            | X-Api-Key (invoke_controller)|
-  | POST /api/v1/agents/{agent_id}/execute      | X-Api-Key (invoke_controller)|
-  | health + OpenAPI                            | public                    |
-
-WHAT TO DO (step by step):
-  1. Copy wheels into execution-service/wheels/
-  2. pip install --find-links "./wheels" ccil-webapi-middleware-fastapi==1.2.0 ...
-  3. cp ai-platform-config.yml.example ai-platform-config.yml
-     Edit jwt / Redis settings from platform team
-  4. cd execution-service && python -m ccil_webapi_middleware   (config check)
-  5. In .env: AUTH_MIDDLEWARE_ENABLED=true
-  6. Start from execution-service directory: agent-execution
-
-NOTE: Outbound calls to tool execution service still use X-Service-Key in
-  local_tools_client.py (TOOL_EXECUTION_SERVICE_KEY) — not inbound API auth.
-
---------------------------------------------------------------------------------
-B5. Unchanged invoke / API key behavior (still in execution service)
---------------------------------------------------------------------------------
-FILE: execution-service/src/agent_execution/api/dependencies.py
-  - get_api_key() requires X-Api-Key header for invoke routes
-
-FILE: execution-service/src/agent_execution/api/controllers/invoke_controller.py
-  - Published slug invoke + execute by agent_id use deployment API keys
+ACTION: REPLACE ENTIRE FILE
+================================================================================
+FROM python:3.12-slim
+WORKDIR /app
+COPY execution-service/pyproject.toml execution-service/README.md ./
+COPY execution-service/src ./src
+# Optional platform-auth wheels (ccil-webapi-middleware-fastapi, etc.):
+# COPY execution-service/wheels /wheels
+# RUN pip install --no-cache-dir /wheels/*.whl
+COPY execution-service/ai-platform-config.yml.example ./ai-platform-config.yml.example
+RUN pip install --no-cache-dir .
+EXPOSE 8765
+CMD ["agent-execution"]
 
 ================================================================================
-PART C — storage-service
+FILE: execution-service/pyproject.toml
+ACTION: REPLACE ENTIRE FILE
 ================================================================================
+[project]
+name = "ccil-agent-execution-service"
+version = "4.0.0"
+description = "Agent runtime: threads, runs, and a LangGraph execution engine"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.32.0",
+  "httpx>=0.28.0",
+  "pydantic>=2.10.0",
+  "pydantic-settings>=2.6.0",
+  "langgraph>=0.2.0",
+  "langchain-core>=0.3.0",
+  "asyncpg>=0.30.0",
+  "cryptography>=43.0.0",
+  "fastmcp>=4.0.0",
+]
 
---------------------------------------------------------------------------------
-C1. Dependencies
---------------------------------------------------------------------------------
-FILE: storage-service/pyproject.toml
-  - Removed: ccil-platform-auth
+[project.optional-dependencies]
+dev = ["pytest>=8.3.0", "pytest-asyncio>=0.24.0"]
+# Install from local wheels: pip install --find-links ./wheels -e ".[platform-auth]"
+platform-auth = [
+  "ccil-webapi-middleware-fastapi==1.2.0",
+  "ccil-webapi-middleware==2.1.0",
+  "ccil-cache-redis==1.1.0",
+]
 
---------------------------------------------------------------------------------
-C2. Docker
---------------------------------------------------------------------------------
+[project.scripts]
+agent-execution = "agent_execution.main:main"
+agent-execution-worker = "agent_execution.worker_main:main"
+
+[build-system]
+requires = ["setuptools>=75.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+================================================================================
 FILE: storage-service/Dockerfile
-  - Removed: COPY platform-auth + pip install
-
---------------------------------------------------------------------------------
-C3. Inlined auth (same pattern as execution)
---------------------------------------------------------------------------------
-FILES (NEW):
-  storage-service/src/storage_service/infrastructure/auth/__init__.py
-  storage-service/src/storage_service/infrastructure/auth/principal.py
-  storage-service/src/storage_service/infrastructure/auth/verifier.py
-
-IMPORTS UPDATED:
-  storage-service/src/storage_service/api/dependencies.py
-  storage-service/src/storage_service/core/container.py
-
-WHAT TO DO:
-  cd storage-service
-  pip install -e .
-  # Storage service does NOT use ccil_webapi_middleware_fastapi yet — only
-  # inlined JWT principal verifier for incoming Bearer tokens.
+ACTION: REPLACE ENTIRE FILE
+================================================================================
+FROM python:3.12-slim
+WORKDIR /app
+COPY storage-service/pyproject.toml storage-service/README.md ./
+COPY storage-service/src ./src
+RUN pip install --no-cache-dir .
+EXPOSE 8770
+CMD ["storage-service"]
 
 ================================================================================
-PART D — README
+FILE: storage-service/pyproject.toml
+ACTION: REPLACE ENTIRE FILE
+================================================================================
+[project]
+name = "ccil-storage-service"
+version = "0.2.0"
+description = "Thread artifact storage (PostgreSQL metadata + S3/MinIO)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.32.0",
+  "httpx>=0.28.0",
+  "pydantic>=2.10.0",
+  "pydantic-settings>=2.6.0",
+  "asyncpg>=0.30.0",
+  "boto3>=1.35.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3.0", "pytest-asyncio>=0.24.0"]
+
+[project.scripts]
+storage-service = "storage_service.main:main"
+
+[build-system]
+requires = ["setuptools>=75.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+================================================================================
+FILE: storage-service/src/storage_service/infrastructure/auth/__init__.py
+ACTION: REPLACE ENTIRE FILE
+================================================================================
+from storage_service.infrastructure.auth.principal import PlatformPrincipal, parse_codes
+from storage_service.infrastructure.auth.verifier import AuthError, PlatformTokenVerifier
+
+__all__ = [
+    "AuthError",
+    "PlatformPrincipal",
+    "PlatformTokenVerifier",
+    "parse_codes",
+]
+
+================================================================================
+FILE: storage-service/src/storage_service/infrastructure/auth/principal.py
+ACTION: REPLACE ENTIRE FILE
+================================================================================
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+def parse_codes(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    raw_parts: list[str]
+    if isinstance(value, str):
+        raw_parts = [value]
+    elif isinstance(value, (list, tuple, set)):
+        raw_parts = [str(item) for item in value]
+    else:
+        raw_parts = [str(value)]
+    codes: list[str] = []
+    for part in raw_parts:
+        for piece in part.split(","):
+            code = piece.strip()
+            if code and code not in codes:
+                codes.append(code)
+    return tuple(codes)
+
+
+@dataclass(frozen=True, slots=True)
+class PlatformPrincipal:
+    token: str
+    subject: str
+    username: str
+    user_id: str
+    groups: tuple[str, ...]
+    permissions: tuple[str, ...]
+
+    def has_all(self, required: tuple[str, ...]) -> bool:
+        if not required:
+            return True
+        owned = set(self.permissions)
+        return all(code in owned for code in required)
+
+================================================================================
+FILE: storage-service/src/storage_service/api/dependencies.py
+ACTION: REPLACE ENTIRE FILE
+================================================================================
+from __future__ import annotations
+
+from typing import Annotated
+
+from fastapi import Depends, Header
+from storage_service.infrastructure.auth import AuthError, PlatformPrincipal
+
+from storage_service.application.artifact_service import ArtifactService
+from storage_service.core.container import get_artifact_service_dep, get_container
+from storage_service.core.exceptions import ServiceError
+from storage_service.settings import Settings, get_settings
+
+
+def get_artifact_service(settings: Annotated[Settings, Depends(get_settings)]) -> ArtifactService:
+    return get_artifact_service_dep(settings)
+
+
+async def get_platform_principal(
+    settings: Annotated[Settings, Depends(get_settings)],
+    authorization: Annotated[str | None, Header()] = None,
+) -> PlatformPrincipal:
+    try:
+        return await get_container(settings).platform_auth.authenticate(authorization)
+    except AuthError as exc:
+        raise ServiceError(exc.code, exc.message, exc.status_code) from exc
+
+
+def get_bearer_token(principal: Annotated[PlatformPrincipal, Depends(get_platform_principal)]) -> str:
+    return principal.token
+
+================================================================================
+FILE: storage-service/src/storage_service/core/container.py
+ACTION: REPLACE ENTIRE FILE
+================================================================================
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from storage_service.infrastructure.auth import PlatformTokenVerifier, parse_codes
+
+from storage_service.application.artifact_service import ArtifactService
+from storage_service.infrastructure.clients.platform_clients import AgentConfigClient, ExecutionClient
+from storage_service.infrastructure.postgres.artifact_repository import ArtifactRepository
+from storage_service.infrastructure.s3.object_store import S3ObjectStore
+from storage_service.settings import Settings
+
+
+@dataclass
+class ApplicationContainer:
+    settings: Settings
+    repo: ArtifactRepository = field(init=False)
+    s3: S3ObjectStore = field(init=False)
+    platform_auth: PlatformTokenVerifier = field(init=False)
+    artifact_service: ArtifactService = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.repo = ArtifactRepository(self.settings.postgres_url)
+        self.s3 = S3ObjectStore(self.settings)
+        if self.settings.s3_access_key:
+            try:
+                self.s3.ensure_bucket()
+            except Exception:
+                pass
+        self.platform_auth = PlatformTokenVerifier(
+            configured=bool(self.settings.auth_service_base_url.strip()),
+            base_url=self.settings.auth_service_base_url,
+            verify_ssl=self.settings.verify_ssl,
+            me_path=self.settings.auth_me_path,
+            cache_ttl_seconds=self.settings.auth_principal_cache_seconds,
+            required_permissions=parse_codes(self.settings.auth_required_permissions),
+        )
+        self.artifact_service = ArtifactService(
+            self.settings,
+            self.repo,
+            self.s3,
+            AgentConfigClient(self.settings),
+            ExecutionClient(self.settings),
+        )
+
+    async def shutdown(self) -> None:
+        await self.platform_auth.aclose()
+        await self.repo.aclose()
+
+
+_container: ApplicationContainer | None = None
+
+
+def get_container(settings: Settings) -> ApplicationContainer:
+    global _container
+    if _container is None:
+        _container = ApplicationContainer(settings)
+    return _container
+
+
+async def shutdown_container() -> None:
+    global _container
+    if _container is not None:
+        await _container.shutdown()
+        _container = None
+
+
+def get_artifact_service_dep(settings: Settings) -> ArtifactService:
+    return get_container(settings).artifact_service
+
+================================================================================
+FILE: storage-service/src/storage_service/infrastructure/auth/verifier.py
+ACTION: REPLACE ENTIRE FILE
+================================================================================
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import logging
+import time
+from dataclasses import dataclass
+
+import httpx
+
+from storage_service.infrastructure.auth.principal import PlatformPrincipal, parse_codes
+
+logger = logging.getLogger(__name__)
+
+_NAME_URI = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name"
+_NAME_ID_URI = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"
+_ROLE_URI = "http://schemas.microsoft.com/ws/2008/06/identity/claims/role"
+
+_USERNAME_CLAIMS = ("unique_name", "preferred_username", "username", "name", "tokenkey", _NAME_URI)
+_SUBJECT_CLAIMS = ("sub", "nameid", "userid", "user_id", _NAME_ID_URI)
+_PERMISSION_CLAIMS = ("roles", "role", "permissions", "category", _ROLE_URI)
+
+
+class AuthError(Exception):
+    def __init__(self, code: str, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+
+
+@dataclass(slots=True)
+class _CacheEntry:
+    expires_at: float
+    principal: PlatformPrincipal
+
+
+class PlatformTokenVerifier:
+    """Read the caller identity from the platform JWT payload."""
+
+    def __init__(
+        self,
+        *,
+        configured: bool = True,
+        me_path: str = "/api/v1/auth/me",
+        cache_ttl_seconds: int = 0,
+        required_permissions: tuple[str, ...] = (),
+        base_url: str = "",
+        verify_ssl: bool = True,
+        timeout_seconds: float = 10.0,
+        http: httpx.AsyncClient | None = None,
+    ) -> None:
+        del configured, me_path, base_url, verify_ssl, timeout_seconds
+        self._cache_ttl_seconds = max(cache_ttl_seconds, 0)
+        self._required_permissions = required_permissions
+        self._owns_http = http is None
+        self._http = http
+        self._cache: dict[str, _CacheEntry] = {}
+
+    async def aclose(self) -> None:
+        if self._owns_http and self._http is not None:
+            await self._http.aclose()
+
+    async def authenticate(self, authorization: str | None) -> PlatformPrincipal:
+        token = _bearer(authorization)
+        if not token:
+            raise AuthError("UNAUTHORIZED", "Authorization bearer token is required.", 401)
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        cached = self._cached(digest)
+        if cached is not None:
+            return cached
+        principal = _principal_from_token(token)
+        if not principal.has_all(self._required_permissions):
+            logger.info(
+                "auth.forbidden user=%s",
+                principal.username or principal.subject or principal.user_id,
+            )
+            raise AuthError("FORBIDDEN", "Caller is missing a required platform permission.", 403)
+        logger.info(
+            "auth.accepted user=%s",
+            principal.username or principal.subject or principal.user_id,
+        )
+        if self._cache_ttl_seconds:
+            self._cache[digest] = _CacheEntry(time.monotonic() + self._cache_ttl_seconds, principal)
+        return principal
+
+    def _cached(self, digest: str) -> PlatformPrincipal | None:
+        entry = self._cache.get(digest)
+        if entry is None:
+            return None
+        if entry.expires_at <= time.monotonic():
+            self._cache.pop(digest, None)
+            return None
+        return entry.principal
+
+
+def _bearer(authorization: str | None) -> str:
+    if not authorization:
+        return ""
+    value = authorization.strip()
+    if value.lower().startswith("bearer "):
+        value = value[7:].strip()
+    return value
+
+
+def _principal_from_token(token: str) -> PlatformPrincipal:
+    claims = _claims(token)
+    _reject_if_expired(claims)
+    username = _first(claims, _USERNAME_CLAIMS)
+    subject = _first(claims, _SUBJECT_CLAIMS)
+    user_id = _first(claims, ("userid", "user_id", "nameid", "sub", _NAME_ID_URI)) or subject
+    permissions = ()
+    for key in _PERMISSION_CLAIMS:
+        permissions = parse_codes(_claim(claims, key))
+        if permissions:
+            break
+    return PlatformPrincipal(
+        token=token,
+        subject=subject,
+        username=username,
+        user_id=user_id,
+        groups=parse_codes(_claim(claims, "groups")),
+        permissions=permissions,
+    )
+
+
+def _claims(token: str) -> dict:
+    parts = token.split(".")
+    if len(parts) < 2 or not parts[1]:
+        raise AuthError("UNAUTHORIZED", "Platform token could not be read.", 401)
+    padded = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+    except (ValueError, UnicodeError) as exc:
+        raise AuthError("UNAUTHORIZED", "Platform token could not be read.", 401) from exc
+    if not isinstance(payload, dict):
+        raise AuthError("UNAUTHORIZED", "Platform token could not be read.", 401)
+    return payload
+
+
+def _reject_if_expired(claims: dict) -> None:
+    raw = _claim(claims, "exp")
+    if raw in (None, ""):
+        return
+    try:
+        expires_at = float(raw)
+    except (TypeError, ValueError):
+        return
+    if expires_at <= time.time():
+        raise AuthError("UNAUTHORIZED", "Platform token has expired.", 401)
+
+
+def _claim(claims: dict, name: str):
+    for key, value in claims.items():
+        if str(key).lower() == name.lower():
+            return value
+    return None
+
+
+def _first(claims: dict, names: tuple[str, ...]) -> str:
+    for name in names:
+        value = _claim(claims, name)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+================================================================================
+FILE: execution-service/src/agent_execution/settings.py
+ACTION: ADD these two lines inside class Settings (after cors_origins line)
+================================================================================
+    auth_middleware_enabled: bool = False
+    ai_platform_config_file: str = "ai-platform-config.yml"
+
+================================================================================
+FILE: execution-service/src/agent_execution/api/dependencies.py
+ACTION: CHANGE import line 7 FROM:
+================================================================================
+from platform_auth import AuthError, PlatformPrincipal
+TO:
+from agent_execution.infrastructure.auth import AuthError, PlatformPrincipal
+
+================================================================================
+FILE: execution-service/src/agent_execution/core/container.py
+ACTION: CHANGE import line 5 FROM:
+================================================================================
+from platform_auth import PlatformTokenVerifier, parse_codes
+TO:
+from agent_execution.infrastructure.auth import PlatformTokenVerifier, parse_codes
+
+================================================================================
+FILE: execution-service/src/agent_execution/api/controllers/thread_controller.py
+ACTION: CHANGE import FROM:
+================================================================================
+from platform_auth import PlatformPrincipal
+TO:
+from agent_execution.infrastructure.auth import PlatformPrincipal
+
+================================================================================
+FILE: execution-service/src/agent_execution/api/controllers/workflow_controller.py
+ACTION: CHANGE import FROM:
+================================================================================
+from platform_auth import PlatformPrincipal
+TO:
+from agent_execution.infrastructure.auth import PlatformPrincipal
+
+================================================================================
+FILE: execution-service/pyproject.toml
+ACTION: REMOVE from dependencies array:
+================================================================================
+  "ccil-platform-auth",
+
+================================================================================
+FILE: storage-service/pyproject.toml
+ACTION: REMOVE from dependencies array:
+================================================================================
+  "ccil-platform-auth",
+
+================================================================================
+FILE: storage-service/Dockerfile
+ACTION: REMOVE these two lines if present:
+================================================================================
+COPY platform-auth /tmp/platform-auth
+RUN pip install --no-cache-dir /tmp/platform-auth
+
+================================================================================
+FILE: execution-service/Dockerfile
+ACTION: REMOVE these two lines if present:
+================================================================================
+COPY platform-auth /tmp/platform-auth
+RUN pip install --no-cache-dir /tmp/platform-auth
+
 ================================================================================
 FILE: README.md
-  - Removed row for platform-auth folder in monorepo table
+ACTION: REMOVE this table row:
+================================================================================
+| [platform-auth](./platform-auth/) | Shared JWT verification library |
 
 ================================================================================
-QUICK CHECKLIST (operators)
+AUTH BEHAVIOR (no code change — for reference)
 ================================================================================
-[ ] platform-auth folder removed from deployments
-[ ] execution-service: pip install -e . (+ platform-auth wheels if using middleware)
-[ ] execution-service: ai-platform-config.yml present next to pyproject.toml
-[ ] execution-service: AUTH_MIDDLEWARE_ENABLED=true when ready
-[ ] storage-service: pip install -e . (no platform-auth)
-[ ] Docker builds updated (no platform-auth COPY)
+- All /api/v1/* except health, OpenAPI, invoke*, agents/*/execute → need Bearer JWT (middleware)
+- /api/v1/invoke* and POST /api/v1/agents/{id}/execute → X-Api-Key header (invoke_controller)
+- invoke_controller.py and get_api_key() — NO changes required if already present
 
-================================================================================
-END OF FILE
-================================================================================
+END
