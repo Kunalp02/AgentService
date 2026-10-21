@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import Depends, Header
-from platform_auth import AuthError, PlatformPrincipal
+from storage_service.infrastructure.auth import AuthError, PlatformPrincipal
 
 from storage_service.application.artifact_service import ArtifactService
 from storage_service.core.container import get_artifact_service_dep, get_container

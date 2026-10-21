@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from platform_auth import PlatformTokenVerifier, parse_codes
+from agent_execution.infrastructure.auth import PlatformTokenVerifier, parse_codes
 
 from agent_execution.agents.graph.context import AgentGraphContext
 from agent_execution.infrastructure.auth.service_token_provider import (

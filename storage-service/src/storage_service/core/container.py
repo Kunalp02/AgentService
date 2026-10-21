@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from platform_auth import PlatformTokenVerifier, parse_codes
+from storage_service.infrastructure.auth import PlatformTokenVerifier, parse_codes
 
 from storage_service.application.artifact_service import ArtifactService
 from storage_service.infrastructure.clients.platform_clients import AgentConfigClient, ExecutionClient

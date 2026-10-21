@@ -4,7 +4,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from platform_auth import PlatformPrincipal
+from agent_execution.infrastructure.auth import PlatformPrincipal
 
 from agent_execution.api.controller import ApiController
 from agent_execution.api.dependencies import get_platform_principal, get_thread_service

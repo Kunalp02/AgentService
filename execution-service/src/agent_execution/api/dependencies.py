@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import Depends, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from platform_auth import AuthError, PlatformPrincipal
+from agent_execution.infrastructure.auth import AuthError, PlatformPrincipal
 
 from agent_execution.core.container import ApplicationContainer, get_container
 from agent_execution.core.exceptions import ServiceError

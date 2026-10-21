@@ -19,7 +19,7 @@ from agent_execution.schemas.workflows import (
     WorkflowUpsert,
 )
 from agent_execution.services.workflow_service import WorkflowService
-from platform_auth import PlatformPrincipal
+from agent_execution.infrastructure.auth import PlatformPrincipal
 
 
 class WorkflowController(ApiController):
