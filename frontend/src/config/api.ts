@@ -36,7 +36,9 @@ export const SERVICE_BASE_URL = {
   workflow: clean(import.meta.env.VITE_WORKFLOW_BASE_URL as string | undefined) || API_BASE_URL,
   ml: clean(import.meta.env.VITE_ML_BASE_URL as string | undefined) || API_BASE_URL,
   engine: clean(import.meta.env.VITE_ENGINE_BASE_URL as string | undefined) || API_BASE_URL,
-  execution: cleanPrefix(import.meta.env.VITE_EXECUTION_BASE_URL as string | undefined)
+  execution:
+    clean(import.meta.env.VITE_EXECUTION_BASE_URL as string | undefined) ||
+    API_BASE_URL,
 } as const;
 
 export type ServiceName = keyof typeof SERVICE_PREFIX;

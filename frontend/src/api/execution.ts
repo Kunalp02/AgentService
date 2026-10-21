@@ -133,11 +133,28 @@ function messageOf(
       message: "Session expired or token missing (401). Sign in again.",
       code,
     };
-  if (status === 404)
+  if (status === 404) {
+    const detail =
+      typeof body?.message === "string" && body.message.trim()
+        ? body.message.trim()
+        : typeof body?.detail === "string"
+          ? body.detail.trim()
+          : "";
+    if (detail.toLowerCase().includes("not found")) {
+      return {
+        message: detail.includes("Resource not found:")
+          ? `${detail} — check execution service AGENT_CONFIG_BASE_URL and that this agent exists in agent-config.`
+          : detail,
+        code,
+      };
+    }
     return {
-      message: "This agent is not known to the execution service (404).",
+      message:
+        detail ||
+        "Not found (404). Check the execution service URL (VITE_EXECUTION_BASE_URL / proxy) and path /api/v1/...",
       code,
     };
+  }
   if (status === 502 || status === 503)
     return { message: "The model gateway is unavailable right now.", code };
   return { message: `Agent execution failed (${status}).`, code };

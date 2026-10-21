@@ -40,7 +40,12 @@ class BasePlatformClient:
         token = await self._resolve_token(bearer_token)
         response = await self._http.get(path, headers=self._headers_for(token))
         if response.status_code == 404:
-            raise ServiceError("NOT_FOUND", f"Resource not found: {path}", 404)
+            raise ServiceError(
+                "NOT_FOUND",
+                f"Agent config returned 404 for {path}. "
+                "Verify AGENT_CONFIG_BASE_URL and that the agent id exists.",
+                404,
+            )
         if response.status_code in (401, 403):
             raise ServiceError("FORBIDDEN", "Access denied by upstream service.", response.status_code)
         if response.status_code >= 400:
