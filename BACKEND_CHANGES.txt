@@ -1,0 +1,193 @@
+================================================================================
+BACKEND CHANGES ONLY (AgentService monorepo)
+================================================================================
+Summary of backend updates merged to main (platform-auth removal + execution
+service CCIL middleware + storage auth inlining). Frontend changes are NOT
+included here.
+
+================================================================================
+PART A — REMOVED: platform-auth library
+================================================================================
+
+DELETED (entire folder — do not use anymore):
+  platform-auth/
+    pyproject.toml
+    src/platform_auth/__init__.py
+    src/platform_auth/principal.py
+    src/platform_auth/verifier.py
+    tests/test_verifier.py
+
+WHAT TO DO:
+  - Stop installing: pip install ./platform-auth
+  - Stop copying platform-auth in Docker builds
+  - Use in-service auth modules below instead
+
+================================================================================
+PART B — execution-service
+================================================================================
+
+--------------------------------------------------------------------------------
+B1. Dependencies
+--------------------------------------------------------------------------------
+FILE: execution-service/pyproject.toml
+
+CHANGES:
+  - Removed dependency: ccil-platform-auth
+  - Added optional extra [platform-auth] for CCIL wheels (install from local wheels):
+      ccil-webapi-middleware-fastapi==1.2.0
+      ccil-webapi-middleware==2.1.0
+      ccil-cache-redis==1.1.0
+
+WHAT TO DO:
+  cd execution-service
+  pip install -e .
+  # When you have wheel files:
+  pip install --find-links "./wheels" -e ".[platform-auth]"
+
+--------------------------------------------------------------------------------
+B2. Docker
+--------------------------------------------------------------------------------
+FILE: execution-service/Dockerfile
+
+CHANGES:
+  - Removed: COPY platform-auth + pip install platform-auth
+  - Added: COPY ai-platform-config.yml.example
+  - Commented pattern for optional COPY wheels/*.whl before pip install .
+
+WHAT TO DO:
+  - Build from repo root as before
+  - For production auth middleware: copy .whl into execution-service/wheels/ and
+    uncomment wheel install lines in Dockerfile if you use container builds
+
+--------------------------------------------------------------------------------
+B3. JWT caller auth (replaces platform-auth package)
+--------------------------------------------------------------------------------
+FILES (NEW / UPDATED):
+  execution-service/src/agent_execution/infrastructure/auth/__init__.py
+  execution-service/src/agent_execution/infrastructure/auth/principal.py
+  execution-service/src/agent_execution/infrastructure/auth/verifier.py
+
+CHANGES:
+  - PlatformPrincipal, parse_codes, AuthError, PlatformTokenVerifier moved here
+  - Verifier reads JWT payload (claims) locally; checks exp and permissions
+
+IMPORTS UPDATED (platform_auth -> agent_execution.infrastructure.auth):
+  execution-service/src/agent_execution/api/dependencies.py
+  execution-service/src/agent_execution/core/container.py
+  execution-service/src/agent_execution/api/controllers/thread_controller.py
+  execution-service/src/agent_execution/api/controllers/workflow_controller.py
+
+WHAT TO DO:
+  - No separate platform-auth install
+  - Route handlers still use Depends(get_platform_principal) / get_bearer_token
+    for studio APIs (token must be present; full validation when middleware on)
+
+--------------------------------------------------------------------------------
+B4. CCIL FastAPI middleware (ccil_webapi_middleware_fastapi)
+--------------------------------------------------------------------------------
+FILES:
+  execution-service/src/agent_execution/main.py          (UPDATED)
+  execution-service/src/agent_execution/guard.py         (NEW)
+  execution-service/src/agent_execution/settings.py      (UPDATED)
+  execution-service/ai-platform-config.yml.example       (NEW)
+  execution-service/PLATFORM_AUTH_MIDDLEWARE.md          (NEW — full runbook)
+  execution-service/wheels/.gitkeep                      (NEW — drop .whl here)
+
+main.py CHANGES:
+  - After app.include_router(create_api_router()):
+      FastAPIAuth().protect(app, public=[...]) when middleware enabled
+  - No x-service-key skip on middleware
+  - Sets AI_PLATFORM_CONFIG env to path of ai-platform-config.yml when enabled
+
+guard.py CHANGES:
+  - PUBLIC: /docs, /openapi.json, /redoc, /api/v1/health/live, /api/v1/health/ready
+  - PUBLIC_API_KEY_ROUTE_PATTERNS (no JWT at middleware; X-Api-Key in handlers):
+      /api/v1/invoke*
+      /api/v1/agents/*/execute
+
+settings.py NEW FIELDS (.env):
+  AUTH_MIDDLEWARE_ENABLED=false          # set true after wheels + config
+  AI_PLATFORM_CONFIG_FILE=ai-platform-config.yml
+
+AUTH MODEL (execution service):
+  | Routes                                      | Auth at edge              |
+  |---------------------------------------------|---------------------------|
+  | threads, runs, deployments, audit, workflow | Bearer JWT (middleware)   |
+  | /api/v1/invoke/*                            | X-Api-Key (invoke_controller)|
+  | POST /api/v1/agents/{agent_id}/execute      | X-Api-Key (invoke_controller)|
+  | health + OpenAPI                            | public                    |
+
+WHAT TO DO (step by step):
+  1. Copy wheels into execution-service/wheels/
+  2. pip install --find-links "./wheels" ccil-webapi-middleware-fastapi==1.2.0 ...
+  3. cp ai-platform-config.yml.example ai-platform-config.yml
+     Edit jwt / Redis settings from platform team
+  4. cd execution-service && python -m ccil_webapi_middleware   (config check)
+  5. In .env: AUTH_MIDDLEWARE_ENABLED=true
+  6. Start from execution-service directory: agent-execution
+
+NOTE: Outbound calls to tool execution service still use X-Service-Key in
+  local_tools_client.py (TOOL_EXECUTION_SERVICE_KEY) — not inbound API auth.
+
+--------------------------------------------------------------------------------
+B5. Unchanged invoke / API key behavior (still in execution service)
+--------------------------------------------------------------------------------
+FILE: execution-service/src/agent_execution/api/dependencies.py
+  - get_api_key() requires X-Api-Key header for invoke routes
+
+FILE: execution-service/src/agent_execution/api/controllers/invoke_controller.py
+  - Published slug invoke + execute by agent_id use deployment API keys
+
+================================================================================
+PART C — storage-service
+================================================================================
+
+--------------------------------------------------------------------------------
+C1. Dependencies
+--------------------------------------------------------------------------------
+FILE: storage-service/pyproject.toml
+  - Removed: ccil-platform-auth
+
+--------------------------------------------------------------------------------
+C2. Docker
+--------------------------------------------------------------------------------
+FILE: storage-service/Dockerfile
+  - Removed: COPY platform-auth + pip install
+
+--------------------------------------------------------------------------------
+C3. Inlined auth (same pattern as execution)
+--------------------------------------------------------------------------------
+FILES (NEW):
+  storage-service/src/storage_service/infrastructure/auth/__init__.py
+  storage-service/src/storage_service/infrastructure/auth/principal.py
+  storage-service/src/storage_service/infrastructure/auth/verifier.py
+
+IMPORTS UPDATED:
+  storage-service/src/storage_service/api/dependencies.py
+  storage-service/src/storage_service/core/container.py
+
+WHAT TO DO:
+  cd storage-service
+  pip install -e .
+  # Storage service does NOT use ccil_webapi_middleware_fastapi yet — only
+  # inlined JWT principal verifier for incoming Bearer tokens.
+
+================================================================================
+PART D — README
+================================================================================
+FILE: README.md
+  - Removed row for platform-auth folder in monorepo table
+
+================================================================================
+QUICK CHECKLIST (operators)
+================================================================================
+[ ] platform-auth folder removed from deployments
+[ ] execution-service: pip install -e . (+ platform-auth wheels if using middleware)
+[ ] execution-service: ai-platform-config.yml present next to pyproject.toml
+[ ] execution-service: AUTH_MIDDLEWARE_ENABLED=true when ready
+[ ] storage-service: pip install -e . (no platform-auth)
+[ ] Docker builds updated (no platform-auth COPY)
+
+================================================================================
+END OF FILE
+================================================================================
