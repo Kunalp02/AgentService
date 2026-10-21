@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     log_format: str = "text"
     cors_origins: str = "http://localhost:3000"
 
+    auth_middleware_enabled: bool = False
+    ai_platform_config_file: str = "ai-platform-config.yml"
+
     agent_config_base_url: str = ""
     tools_config_base_url: str = ""
     rag_config_base_url: str = ""

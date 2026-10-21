@@ -1,0 +1,18 @@
+# Copy to ai-platform-config.yml next to this file (execution-service root).
+# Fill in values from your platform team. Verify with:
+#   py -m ccil_webapi_middleware
+# (run from the execution-service directory)
+
+jwt:
+  issuer: "https://www.ccilonline.co.in"
+  validateLifetime: true
+  validateSession: true
+
+  jwtCache:
+    RedisConnectionString: "HOST:PORT"
+    RedisCacheId: "1"
+    JWTKey: "JWTSecretKey"
+
+  sessionCache:
+    RedisConnectionString: "HOST:PORT"
+    RedisCacheId: "2"

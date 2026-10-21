@@ -19,6 +19,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3.0", "pytest-asyncio>=0.24.0"]
+# Install from local wheels: pip install --find-links ./wheels -e ".[platform-auth]"
+platform-auth = [
+  "ccil-webapi-middleware-fastapi==1.2.0",
+  "ccil-webapi-middleware==2.1.0",
+  "ccil-cache-redis==1.1.0",
+]
 
 [project.scripts]
 agent-execution = "agent_execution.main:main"
