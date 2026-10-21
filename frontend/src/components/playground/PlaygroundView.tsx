@@ -2,6 +2,14 @@ import React, { useState } from "react";
 import { AlertTriangle, Bot } from "lucide-react";
 import { usePlatform } from "../../context/PlatformContext";
 import { executionApi } from "../../api/execution";
+import { MarkdownMessage } from "./MarkdownMessage";
+
+type Turn = {
+  role: "user" | "agent";
+  text: string;
+  /** true when `text` is an error message rather than a model reply */
+  error?: boolean;
+};
 
 export const PlaygroundView: React.FC = () => {
   const { agents, selectedPlaygroundAgentId, setSelectedPlaygroundAgentId } =
@@ -12,9 +20,7 @@ export const PlaygroundView: React.FC = () => {
   const [threadId, setThreadId] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
-  const [turns, setTurns] = useState<
-    { role: "user" | "agent"; text: string }[]
-  >([]);
+  const [turns, setTurns] = useState<Turn[]>([]);
 
   const send = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,7 +39,11 @@ export const PlaygroundView: React.FC = () => {
       setThreadId(result.threadId);
       setTurns((prev) => [
         ...prev,
-        { role: "agent", text: result.error || result.output || "(no output)" },
+        {
+          role: "agent",
+          text: result.error || result.output || "(no output)",
+          error: !!result.error,
+        },
       ]);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Test run failed.");
@@ -84,21 +94,33 @@ export const PlaygroundView: React.FC = () => {
         )}
       </div>
 
-      <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3 min-h-40">
+      <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-4 min-h-40">
         {turns.length === 0 && (
           <p className="text-xs text-slate-500">No test messages yet.</p>
         )}
-        {turns.map((turn, index) => (
-          <div
-            key={index}
-            className={`text-xs whitespace-pre-wrap ${turn.role === "user" ? "text-slate-200" : "text-cyan-100"}`}
-          >
-            <span className="font-semibold">
-              {turn.role === "user" ? "You" : "Agent"}:{" "}
-            </span>
-            {turn.text}
-          </div>
-        ))}
+        {turns.map((turn, index) =>
+          turn.role === "user" ? (
+            // What the person typed is shown as typed - never parsed as Markdown.
+            <div
+              key={index}
+              className="text-xs whitespace-pre-wrap break-words text-slate-200"
+            >
+              <span className="font-semibold">You: </span>
+              {turn.text}
+            </div>
+          ) : (
+            <div key={index} className="min-w-0 border-l-2 border-slate-800 pl-3">
+              <div className="mb-1 text-xs font-semibold text-cyan-100">Agent</div>
+              {turn.error ? (
+                <div className="text-xs whitespace-pre-wrap break-words text-rose-300">
+                  {turn.text}
+                </div>
+              ) : (
+                <MarkdownMessage text={turn.text} />
+              )}
+            </div>
+          ),
+        )}
       </div>
 
       <form
@@ -148,6 +170,3 @@ export const PlaygroundView: React.FC = () => {
     </div>
   );
 };
-
-
-
