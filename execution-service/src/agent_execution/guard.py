@@ -17,5 +17,9 @@ PUBLIC.extend(
     ]
 )
 
-# Published invoke API uses X-Api-Key in route handlers, not platform JWT.
-PUBLIC_PREFIX: str = "/api/v1/invoke"
+# Published agent APIs: validated with X-Api-Key in invoke_controller handlers,
+# not with platform JWT at the middleware layer.
+PUBLIC_API_KEY_ROUTE_PATTERNS: list[str] = [
+    "/api/v1/invoke*",
+    "/api/v1/agents/*/execute",
+]

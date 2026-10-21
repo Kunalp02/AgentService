@@ -13,7 +13,7 @@ from agent_execution.api.exception_handlers import register_exception_handlers
 from agent_execution.api.middleware import RequestContextMiddleware
 from agent_execution.api.router import create_api_router
 from agent_execution.core.container import get_container, shutdown_container
-from agent_execution.guard import PUBLIC, PUBLIC_PREFIX
+from agent_execution.guard import PUBLIC, PUBLIC_API_KEY_ROUTE_PATTERNS
 from agent_execution.logging_config import configure_logging, uvicorn_log_config
 from agent_execution.settings import get_settings
 
@@ -60,8 +60,7 @@ def _apply_auth_middleware(app: FastAPI) -> None:
     _configure_platform_auth_config()
     FastAPIAuth().protect(
         app,
-        public=[*PUBLIC, PUBLIC_PREFIX + "*"],
-        skip=lambda request: bool(request.headers.get("x-service-key")),
+        public=[*PUBLIC, *PUBLIC_API_KEY_ROUTE_PATTERNS],
     )
     logger.info("Platform auth middleware enabled")
 

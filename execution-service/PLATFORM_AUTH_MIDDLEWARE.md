@@ -66,6 +66,13 @@ agent-execution
 python -m uvicorn agent_execution.main:app --host 127.0.0.1 --port 8765
 ```
 
-Public routes and invoke API-key routes are defined in `src/agent_execution/guard.py`.
+## Authentication model
 
-**Note:** Requests with header `x-service-key` skip JWT middleware (`skip` callback). Only use this if downstream code validates that key.
+| Surface | Auth |
+|--------|------|
+| Studio / runtime APIs (threads, runs, deployments, audit, workflows, …) | Platform **Bearer JWT** (validated by `ccil_webapi_middleware_fastapi`) |
+| **Published invoke** (`/api/v1/invoke/...`) | **X-Api-Key** (deployment key from agent service) — middleware public; key checked in `invoke_controller` |
+| **Execute by agent id** (`POST /api/v1/agents/{agent_id}/execute`) | **X-Api-Key** — same as invoke |
+| Health + OpenAPI | Public (no auth) |
+
+Route patterns are in `src/agent_execution/guard.py`.
