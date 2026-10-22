@@ -16,6 +16,25 @@ DEPENDENCIES (workflow builder)
 - VITE_WORKFLOW_BASE_URL or VITE_WORKFLOW_PREFIX (see frontend/src/config/api.ts).
 - Execution service workflow routes under /api/v1/workflows (already in execution-service on main).
 
+FILE INDEX (today's merge)
+  execution-service/src/agent_execution/api/controllers/thread_controller.py
+  execution-service/src/agent_execution/services/manifest_service.py
+  frontend/WORKFLOW_BUILDER.md
+  frontend/src/App.tsx
+  frontend/src/api/execution.ts
+  frontend/src/api/workflows.ts
+  frontend/src/components/agents/AgentEditorForm.tsx
+  frontend/src/components/agents/AgentStudioView.tsx
+  frontend/src/components/agents/agentEditorConstants.ts
+  frontend/src/components/agents/useAgentEditor.ts
+  frontend/src/components/audit/ExecutionActivity.tsx
+  frontend/src/components/layout/Sidebar.tsx
+  frontend/src/components/workflow/WorkflowAgentEditorPanel.tsx
+  frontend/src/components/workflow/WorkflowStudioView.tsx
+  frontend/src/components/workflow/workflowTemplates.ts
+  frontend/src/context/PlatformContext.tsx
+  frontend/src/types/workflow.ts
+
 ========================================================================
 STEP 0 — DELETE THESE FILES (optional cleanup artifacts)
 ========================================================================
