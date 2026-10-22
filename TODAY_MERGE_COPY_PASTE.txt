@@ -1,0 +1,5718 @@
+TODAY MERGE — COPY-PASTE PORTING GUIDE
+========================================================================
+Date: 2026-10-22 (merged to main)
+Merge commits: cleanup execution APIs + workflow builder UI
+Diff range: dc77a67..main (main)
+
+HOW TO USE
+- Paths are relative to AgentService repo root.
+- ACTION: NEW FILE = create path and paste body.
+- ACTION: REPLACE ENTIRE FILE = overwrite file with body.
+- ACTION: DELETE = remove file or folder.
+- ACTION: PATCH = apply the described edits only.
+
+DEPENDENCIES (workflow builder)
+- frontend/package.json must include @xyflow/react (React Flow v12).
+- VITE_WORKFLOW_BASE_URL or VITE_WORKFLOW_PREFIX (see frontend/src/config/api.ts).
+- Execution service workflow routes under /api/v1/workflows (already in execution-service on main).
+
+========================================================================
+STEP 0 — DELETE THESE FILES (optional cleanup artifacts)
+========================================================================
+  agent-config-service/MODEL_GATEWAY_MANIFEST_COPY_PASTE.txt
+  agent-config-service/REMOTE_TOOLS_DOTNET_COPY_PASTE.txt
+  date_time_changes.txt
+  execution-service/code_to_text.py
+  frontend/AGENT_REDUX_COPY_PASTE.txt
+  frontend/FRONTEND_CODE.txt
+  frontend/FRONTEND_REMOTE_MCP_COPY_PASTE.txt
+  frontend/files.txt
+
+
+========================================================================
+FILE: execution-service/src/agent_execution/api/controllers/thread_controller.py
+ACTION: REPLACE ENTIRE FILE
+========================================================================
+from __future__ import annotations
+
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Query
+from agent_execution.infrastructure.auth import PlatformPrincipal
+
+from agent_execution.api.controller import ApiController
+from agent_execution.api.dependencies import get_platform_principal, get_thread_service
+from agent_execution.schemas.threads import (
+    Channel,
+    CreateThreadRequest,
+    ExecutionType,
+    ResolveThreadRequest,
+    ThreadResponse,
+)
+from agent_execution.services.thread_service import ThreadService
+
+
+class ThreadController(ApiController):
+    def register(self, router: APIRouter) -> None:
+        router.post("/agents/{agent_id}/threads", response_model=ThreadResponse, tags=["threads"])(self.create)
+        router.post("/agents/{agent_id}/threads/resolve", response_model=ThreadResponse, tags=["threads"])(self.resolve)
+        router.get("/agents/{agent_id}/threads/{thread_id}", response_model=ThreadResponse, tags=["threads"])(self.get)
+        router.get("/agents/{agent_id}/threads", response_model=list[ThreadResponse], tags=["threads"])(self.list_threads)
+
+    async def create(
+        self,
+        agent_id: UUID,
+        body: CreateThreadRequest,
+        service: Annotated[ThreadService, Depends(get_thread_service)],
+        principal: Annotated[PlatformPrincipal, Depends(get_platform_principal)],
+    ) -> ThreadResponse:
+        return await service.create(
+            agent_id,
+            body,
+            channel=Channel.STUDIO,
+            bearer_token=principal.token,
+            triggered_by=principal.username or principal.subject,
+        )
+
+    async def resolve(
+        self,
+        agent_id: UUID,
+        body: ResolveThreadRequest,
+        service: Annotated[ThreadService, Depends(get_thread_service)],
+        principal: Annotated[PlatformPrincipal, Depends(get_platform_principal)],
+    ) -> ThreadResponse:
+        return await service.resolve(
+            agent_id,
+            body.resolved_thread_id(),
+            body.mode,
+            principal.token,
+            principal.username or principal.subject,
+        )
+
+    async def get(
+        self,
+        agent_id: UUID,
+        thread_id: UUID,
+        service: Annotated[ThreadService, Depends(get_thread_service)],
+        principal: Annotated[PlatformPrincipal, Depends(get_platform_principal)],
+    ) -> ThreadResponse:
+        return await service.get(agent_id, thread_id, principal.token)
+
+    async def list_threads(
+        self,
+        agent_id: UUID,
+        service: Annotated[ThreadService, Depends(get_thread_service)],
+        principal: Annotated[PlatformPrincipal, Depends(get_platform_principal)],
+        execution_type: ExecutionType | None = Query(default=None, alias="executionType"),
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> list[ThreadResponse]:
+        return await service.list(agent_id, execution_type, principal.token, limit, offset)
+
+
+========================================================================
+FILE: execution-service/src/agent_execution/services/manifest_service.py
+ACTION: REPLACE ENTIRE FILE
+========================================================================
+import asyncio
+import logging
+from uuid import UUID
+
+import httpx
+
+from agent_execution.core.exceptions import ServiceError
+from agent_execution.infrastructure.platform.platform_clients import PlatformClients
+from agent_execution.schemas.runtime import (
+    AgentMemoryScope,
+    AgentToolRef,
+    KnowledgeBaseMode,
+    KnowledgeBaseRef,
+    McpConnectionConfig,
+    MemoryConfig,
+    ModelConfig,
+    RemoteMcpServerConfig,
+    RuntimeManifest,
+    ToolType,
+)
+from agent_execution.services.manifest_cache import ManifestCache
+from agent_execution.services.manifest_hash import compute_manifest_hash
+from agent_execution.services.model_cache import ModelCache
+from agent_execution.settings import Settings
+
+logger = logging.getLogger(__name__)
+
+
+class ManifestService:
+    def __init__(self, settings: Settings, platform: PlatformClients) -> None:
+        self._settings = settings
+        self._platform = platform
+        self._cache = ManifestCache(settings.manifest_cache_ttl_seconds)
+        self._model_cache = ModelCache(settings.model_cache_ttl_seconds)
+
+    async def resolve(
+        self,
+        agent_id: UUID,
+        bearer_token: str | None,
+        *,
+        revision_id: UUID | None = None,
+        published_only: bool = False,
+    ) -> RuntimeManifest:
+        cache_key = f"{agent_id}:{revision_id or 'live'}:{int(published_only)}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        raw = await self._load_raw(
+            agent_id,
+            bearer_token,
+            revision_id=revision_id,
+            published_only=published_only,
+        )
+        if raw is not None and self._settings.use_runtime_manifest_endpoint:
+            manifest = self._from_runtime_payload(raw, agent_id)
+        else:
+            agent = await self._platform.agent.get_agent(agent_id, bearer_token)
+            model_raw = await self._resolve_model(agent, bearer_token)
+            manifest = self._build_manifest(agent_id, agent, model_raw)
+
+        if published_only and not manifest.is_published:
+            raise ServiceError(
+                "AGENT_NOT_PUBLISHED",
+                "This caller can only run a published agent revision.",
+                400,
+            )
+        self._cache.set(cache_key, manifest)
+        return manifest
+
+    async def _load_raw(
+        self,
+        agent_id: UUID,
+        bearer_token: str | None,
+        *,
+        revision_id: UUID | None,
+        published_only: bool,
+    ) -> dict | None:
+        if not self._settings.use_runtime_manifest_endpoint:
+            return None
+        if revision_id is not None:
+            return await self._platform.agent.get_revision_manifest(
+                agent_id, revision_id, bearer_token
+            )
+        if published_only:
+            try:
+                return await self._platform.agent.get_current_published_manifest(
+                    agent_id, bearer_token
+                )
+            except ServiceError as exc:
+                if exc.status_code not in (404, 405):
+                    raise
+        try:
+            return await self._platform.agent.get_runtime_manifest(
+                agent_id, bearer_token
+            )
+        except ServiceError as exc:
+            if exc.status_code not in (404, 405):
+                raise
+            return None
+
+    async def _resolve_model(self, agent: dict, bearer_token: str | None) -> dict:
+        model_name = agent.get("modelName") or agent.get("model_name")
+        if self._settings.skip_model_registry_lookup and model_name:
+            return {
+                "name": model_name,
+                "modelIdentifier": model_name,
+                "provider": "openai",
+            }
+        model_id = UUID(str(agent["modelId"]))
+        return await self._model_cache.get_or_fetch(
+            model_id, bearer_token, self._platform.tools.get_model
+        )
+
+    @staticmethod
+    def _from_runtime_payload(raw: dict, agent_id: UUID) -> RuntimeManifest:
+        model = raw.get("model") or {}
+        memory = raw.get("memory") or {}
+        revision_raw = raw.get("revisionId")
+        manifest = RuntimeManifest(
+            agent_id=UUID(str(raw.get("agentId") or agent_id)),
+            name=raw["name"],
+            status=raw.get("status", "Draft"),
+            group_ids=[UUID(str(g)) for g in raw.get("groupIds") or []],
+            system_prompt=raw.get("systemPrompt") or "You are a helpful assistant.",
+            temperature=float(raw.get("temperature") or 0.7),
+            model=ModelConfig(
+                model_id=UUID(str(model.get("modelId") or raw.get("modelId"))),
+                name=model.get("name"),
+                model_identifier=model.get("modelIdentifier")
+                or model.get("name")
+                or "gpt-4o-mini",
+                provider=(model.get("provider") or "openai").lower(),
+                base_url=model.get("baseUrl") or model.get("gatewayUrl"),
+                group_ids=[UUID(str(g)) for g in model.get("groupIds") or []],
+                gateway_id=(
+                    UUID(str(model["gatewayId"])) if model.get("gatewayId") else None
+                ),
+                api_key=model.get("apiKey"),
+            ),
+            tools=[AgentToolRef.model_validate(t) for t in raw.get("tools") or []],
+            remote_mcp_servers=ManifestService._remote_servers(raw),
+            mcp_connections=ManifestService._parse_mcp_connections(raw),
+            local_mcp_connection=ManifestService._parse_local_mcp_connection(raw),
+            knowledge_bases=[
+                KnowledgeBaseRef(
+                    knowledge_base_id=UUID(str(kb["knowledgeBaseId"])),
+                    knowledge_base_name=kb.get("knowledgeBaseName"),
+                    mode=KnowledgeBaseMode(kb.get("mode", "Context")),
+                )
+                for kb in raw.get("knowledgeBases") or []
+            ],
+            memory=MemoryConfig.model_validate(memory) if memory else MemoryConfig(),
+            manifest_hash=raw.get("manifestHash") or "",
+            revision_id=UUID(str(revision_raw)) if revision_raw else None,
+        )
+        if not manifest.manifest_hash:
+            manifest.manifest_hash = _hash_manifest(manifest)
+        return manifest
+
+    @staticmethod
+    def _parse_mcp_connections(raw: dict) -> dict[str, McpConnectionConfig]:
+        connections_raw = raw.get("mcpConnections")
+        if not connections_raw:
+            return {}
+        if isinstance(connections_raw, dict):
+            return {
+                str(key): McpConnectionConfig.model_validate(value)
+                for key, value in connections_raw.items()
+            }
+        if isinstance(connections_raw, list):
+            mapped: dict[str, McpConnectionConfig] = {}
+            for item in connections_raw:
+                conn = McpConnectionConfig.model_validate(item)
+                conn_id = conn.connection_id
+                if conn_id is None and isinstance(item, dict):
+                    conn_id = item.get("connectionId") or item.get("id")
+                if conn_id is not None:
+                    mapped[str(conn_id)] = conn
+            return mapped
+        return {}
+
+    @staticmethod
+    def _parse_local_mcp_connection(raw: dict) -> McpConnectionConfig | None:
+        local = raw.get("localMcpConnection")
+        if not local:
+            return None
+        return McpConnectionConfig.model_validate(local)
+
+    @staticmethod
+    def _build_manifest(
+        agent_id: UUID, agent: dict, model_raw: dict
+    ) -> RuntimeManifest:
+        scope_raw = agent.get("memoryScope")
+        scope = AgentMemoryScope(scope_raw) if scope_raw else None
+        manifest = RuntimeManifest(
+            agent_id=agent_id,
+            name=agent["name"],
+            status=agent.get("status", "Draft"),
+            group_ids=[UUID(str(g)) for g in agent.get("groupIds") or []],
+            system_prompt=agent.get("systemPrompt") or "You are a helpful assistant.",
+            temperature=float(agent.get("temperature") or 0.7),
+            model=ModelConfig(
+                model_id=UUID(str(agent["modelId"])),
+                name=model_raw.get("name") or agent.get("modelName"),
+                model_identifier=model_raw.get("modelIdentifier")
+                or model_raw.get("name")
+                or "gpt-4o-mini",
+                provider=(
+                    model_raw.get("provider")
+                    or model_raw.get("classification")
+                    or "openai"
+                ).lower(),
+                base_url=model_raw.get("baseUrl") or model_raw.get("endpoint"),
+                group_ids=[UUID(str(g)) for g in model_raw.get("groupIds") or []],
+            ),
+            tools=[
+                AgentToolRef(
+                    tool_id=UUID(str(t["toolId"])),
+                    tool_name=t.get("toolName"),
+                    tool_type=ToolType(t.get("toolType", "Remote")),
+                )
+                for t in agent.get("tools") or []
+            ],
+            remote_mcp_servers=ManifestService._remote_servers(agent),
+            knowledge_bases=[
+                KnowledgeBaseRef(
+                    knowledge_base_id=UUID(str(kb["knowledgeBaseId"])),
+                    knowledge_base_name=kb.get("knowledgeBaseName"),
+                    mode=KnowledgeBaseMode(kb.get("mode", "Context")),
+                )
+                for kb in agent.get("knowledgeBases") or []
+            ],
+            memory=MemoryConfig(
+                enabled=bool(agent.get("memoryEnabled")),
+                scope=scope,
+                retention=agent.get("memoryRetention"),
+                instructions=agent.get("memoryInstructions"),
+            ),
+        )
+        manifest.manifest_hash = _hash_manifest(manifest)
+        return manifest
+
+    @staticmethod
+    def _remote_servers(raw: dict) -> list[RemoteMcpServerConfig]:
+        servers: list[RemoteMcpServerConfig] = []
+        for server in raw.get("remoteMcpServers") or []:
+            server_id = server.get("id")
+            if not server_id:
+                continue
+            tools = []
+            for tool in server.get("tools") or []:
+                tool_id = tool.get("toolId") or tool.get("id")
+                if not tool_id:
+                    continue
+                tools.append(
+                    AgentToolRef(
+                        tool_id=UUID(str(tool_id)),
+                        tool_name=tool.get("toolName") or tool.get("name"),
+                        tool_type=ToolType.REMOTE,
+                    )
+                )
+            group_ids = []
+            for group_id in server.get("groupIds") or []:
+                group_ids.append(UUID(str(group_id)))
+            servers.append(
+                RemoteMcpServerConfig(
+                    id=UUID(str(server_id)),
+                    name=server.get("name"),
+                    remote_mcp_server_url=server.get("remoteMcpServerUrl"),
+                    transport_type=server.get("transportType"),
+                    auth_option=server.get("authOption"),
+                    api_key=server.get("apiKey"),
+                    group_ids=group_ids,
+                    tools=tools,
+                )
+            )
+        return servers
+
+
+def _hash_manifest(manifest: RuntimeManifest) -> str:
+    return compute_manifest_hash(
+        {
+            "system_prompt": manifest.system_prompt,
+            "temperature": manifest.temperature,
+            "model": manifest.model.model_identifier,
+            "tools": [t.model_dump(mode="json", by_alias=True) for t in manifest.tools],
+            "mcp_connections": {
+                key: value.model_dump(mode="json", by_alias=True)
+                for key, value in manifest.mcp_connections.items()
+            },
+            "local_mcp": (
+                manifest.local_mcp_connection.model_dump(mode="json", by_alias=True)
+                if manifest.local_mcp_connection
+                else None
+            ),
+            "kbs": [k.model_dump(mode="json") for k in manifest.knowledge_bases],
+            "memory": manifest.memory.model_dump(mode="json"),
+            "status": manifest.status,
+            "revision": str(manifest.revision_id or ""),
+        }
+    )
+
+
+class RagContextService:
+    ASK_TIMEOUT_SECONDS = 20.0
+
+    def __init__(self, platform: PlatformClients) -> None:
+        self._platform = platform
+
+    async def fetch_context(
+        self, manifest: RuntimeManifest, user_input: str, bearer_token: str | None
+    ) -> tuple[list[str], list[dict]]:
+        context_kbs = [
+            kb
+            for kb in manifest.knowledge_bases
+            if kb.mode == KnowledgeBaseMode.CONTEXT
+        ]
+        if not context_kbs:
+            return [], []
+
+        async def fetch_one(kb: KnowledgeBaseRef) -> dict:
+            entry: dict = {
+                "knowledge_base_id": str(kb.knowledge_base_id),
+                "knowledge_base_name": kb.knowledge_base_name,
+                "label": kb.knowledge_base_name or str(kb.knowledge_base_id),
+                "claims": [],
+            }
+            try:
+                result = await asyncio.wait_for(
+                    self._platform.rag_ask.ask(
+                        kb.knowledge_base_id, user_input, bearer_token
+                    ),
+                    timeout=self.ASK_TIMEOUT_SECONDS,
+                )
+            except (
+                ServiceError,
+                httpx.HTTPError,
+                asyncio.TimeoutError,
+                ValueError,
+            ) as exc:
+                # Any failure of one KB must not fail the run, and must leave a trace in the run record.
+                logger.warning(
+                    "RAG ask failed for kb=%s: %s",
+                    kb.knowledge_base_id,
+                    type(exc).__name__,
+                    exc_info=True,
+                )
+                return {**entry, "error": type(exc).__name__}
+
+            embedding = result.get("embedding_used") or {}
+            if embedding.get("available") is False:
+                logger.warning(
+                    "RAG kb=%s answered without embeddings: %s",
+                    kb.knowledge_base_id,
+                    embedding.get("problem"),
+                )
+            evidence = result.get("evidence") or []
+            entry.update(
+                evidence=evidence,
+                answer=result.get("answer"),
+                confidence=result.get("confidence"),
+                groundedness=result.get("groundedness"),
+                retrieval_mode=result.get("mode"),
+                embedding_available=embedding.get("available"),
+            )
+            # Only live claims go to the model: skip empty text and anything superseded/retired.
+            entry["claims"] = [
+                (str(item["claim"]).strip(), item.get("source"))
+                for item in evidence
+                if str(item.get("claim") or "").strip()
+                and str(item.get("status") or "ACTIVE").upper() == "ACTIVE"
+            ]
+            return entry
+
+        results = await asyncio.gather(*(fetch_one(kb) for kb in context_kbs))
+        blocks: list[str] = []
+        raw_context: list[dict] = []
+        number = (
+            0  # one running number across all KBs so [n] is unambiguous for the model
+        )
+        for entry in results:
+            claims = entry.pop("claims")
+            label = entry.pop("label")
+            raw_context.append(entry)
+            if not claims:
+                continue
+            for index, (claim, source) in enumerate(claims):
+                number += 1
+                line = f"[{number}] {claim}" + (
+                    f" (source: {source})" if source else ""
+                )
+                if index == 0:
+                    blocks.append(f"KB: {label}\n{line}")
+                else:
+                    blocks.append(line)
+        return blocks, raw_context
+
+
+========================================================================
+FILE: frontend/WORKFLOW_BUILDER.md
+ACTION: NEW FILE
+========================================================================
+# Workflow builder — supervisor & HITL
+
+## Supervisor vs specialist agents
+
+| | Supervisor agent | Specialist agents (generator, executor, …) |
+|--|------------------|---------------------------------------------|
+| **Created in** | Agent Studio (same as any agent) | Agent Studio |
+| **KB / tools** | Usually **none** — routing & summary only | **KB, SQL tool**, etc. |
+| **Attached on** | **Workflow canvas** — edges to specialists | **Workflow canvas** — agent node picks `agentId` |
+| **Not** | Listing other agents as “tools” on supervisor record | — |
+
+The workflow only stores **references** (`agentId`) and **templates** (`{{input}}`, `{{sql}}`). Runtime loads each published manifest per step.
+
+Supervisor output should include routable text (e.g. `ROUTE: generate`) matched by **Route** node edges (`when`).
+
+## Human-in-the-loop (planned)
+
+Industry pattern: workflow run enters `WAITING`, UI prompts user, `POST .../runs/{id}/resume` continues.
+
+- Builder shows **Human approval (soon)** — not saved to API yet.
+- Next backend step: `human` node type + paused run state + resume endpoint.
+
+## Test a workflow
+
+1. Publish all agents used on the canvas.
+2. Save workflow → **Publish**.
+3. **Run published workflow** with test input (uses `POST /api/v1/workflows/{id}/runs`).
+
+
+========================================================================
+FILE: frontend/src/App.tsx
+ACTION: REPLACE ENTIRE FILE
+========================================================================
+import React, { useEffect } from "react";
+import { PlatformProvider, usePlatform } from "./context/PlatformContext";
+import { Header } from "./components/layout/Header";
+import { Sidebar } from "./components/layout/Sidebar";
+import { LoginPage } from "./components/auth/LoginPage";
+import { DashboardView } from "./components/dashboard/DashboardView";
+import { UserManagementView } from "./components/users/UserManagementView";
+import { RoleProfileView } from "./components/roles/RoleProfileView";
+import { ToolsManagementView } from "./components/tools/ToolsManagementView";
+import { KnowledgeManagementView } from "./components/knowledge/KnowledgeManagementView";
+import { AgentStudioView } from "./components/agents/AgentStudioView";
+import { PlaygroundView } from "./components/playground/PlaygroundView";
+import { AuditLogsView } from "./components/audit/AuditLogsView";
+import { GatewayModelRegistryView } from "./components/gateway/GatewayModelRegistryView";
+import { ApiKeyManagementView } from "./components/api-keys/ApiKeyManagementView";
+import { WorkflowStudioView } from "./components/workflow/WorkflowStudioView";
+
+const MainContent: React.FC = () => {
+  const {
+    activeView,
+    isAuthenticated,
+    theme,
+    canAccessView,
+    setActiveView,
+    sessionRestoring,
+  } = usePlatform();
+
+  const fallbackOrder = [
+    "dashboard",
+    "users",
+    "roles",
+    "tools",
+    "knowledge",
+    "agents",
+    "model-registry",
+    "playground",
+    "workflows",
+    "api-keys",
+  ];
+  const effectiveView = canAccessView(activeView)
+    ? activeView
+    : (fallbackOrder.find((v) => canAccessView(v)) ?? null);
+
+  useEffect(() => {
+    if (sessionRestoring || !isAuthenticated) return;
+    if (effectiveView && effectiveView !== activeView)
+      setActiveView(effectiveView);
+  }, [
+    activeView,
+    effectiveView,
+    isAuthenticated,
+    sessionRestoring,
+    setActiveView,
+  ]);
+
+  // While we're checking the stored token, show a neutral loading state
+  // instead of flashing the login page.
+  if (sessionRestoring) {
+    return (
+      <div
+        className={`h-screen w-screen flex items-center justify-center ${theme === "light" ? "bg-slate-50" : "bg-slate-950"}`}
+      >
+        <div className="flex flex-col items-center gap-3">
+          <span className="w-6 h-6 border-2 border-slate-600 border-t-indigo-500 rounded-full animate-spin" />
+          <span className="text-xs text-slate-400">Restoring session…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <LoginPage />;
+  }
+
+  const renderActiveView = () => {
+    if (!effectiveView) {
+      return (
+        <div className="p-12 text-center text-slate-400 text-sm">
+          You don't have access to any configured view yet. Contact an
+          administrator.
+        </div>
+      );
+    }
+
+    switch (effectiveView) {
+      case "dashboard":
+        return <DashboardView />;
+      case "users":
+      case "groups":
+        return <UserManagementView />;
+      case "roles":
+        return <RoleProfileView />;
+      case "tools":
+        return <ToolsManagementView />;
+      case "knowledge":
+        return <KnowledgeManagementView />;
+      case "agents":
+        return <AgentStudioView />;
+      case "playground":
+        return <PlaygroundView />;
+      case "workflows":
+        return <WorkflowStudioView />;
+      case "audit":
+        return <AuditLogsView />;
+      case "model-registry":
+        return <GatewayModelRegistryView />;
+      case "api-keys":
+        return <ApiKeyManagementView />;
+      default:
+        return <DashboardView />;
+    }
+  };
+
+  return (
+    <div
+      className={`flex flex-col h-screen w-screen overflow-hidden ${
+        theme === "light" ? "background_light" : "background_dark"
+      }`}
+    >
+      <Header />
+
+      <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
+        <Sidebar />
+
+        <main className="flex-1 min-w-0 min-h-0 overflow-y-auto overflow-x-hidden">
+          {renderActiveView()}
+        </main>
+      </div>
+    </div>
+  );
+};
+
+export default function App() {
+  return (
+    <PlatformProvider>
+      <MainContent />
+    </PlatformProvider>
+  );
+}
+
+
+========================================================================
+FILE: frontend/src/api/execution.ts
+ACTION: REPLACE ENTIRE FILE
+========================================================================
+import { authTokenStore } from "./authTokenStore";
+import { serviceUrl } from "../config/api";
+import { handleUnauthorized } from "./sessionGuard";
+
+// ------------------------------------------------------------------ errors
+
+export class ExecutionApiError extends Error {
+  status: number;
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "ExecutionApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+async function parseBody(r: Response): Promise<any> {
+  const text = await r.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { message: text };
+  }
+}
+
+/** Matches register_exception_handlers()'s {"code": ..., "message": ...} shape. */
+function messageOf(
+  status: number,
+  body: any,
+): { message: string; code?: string } {
+  const code = body?.code;
+  const detail = body?.message ?? body?.detail ?? body?.title;
+  if (typeof detail === "string" && detail.trim()) {
+    return { message: code ? `${code}: ${detail}` : detail, code };
+  }
+  if (status === 400)
+    return {
+      message: "The agent rejected this request — it may not be published.",
+      code,
+    };
+  if (status === 401)
+    return {
+      message: "Session expired or token missing (401). Sign in again.",
+      code,
+    };
+  if (status === 404) {
+    const detail =
+      typeof body?.message === "string" && body.message.trim()
+        ? body.message.trim()
+        : typeof body?.detail === "string"
+          ? body.detail.trim()
+          : "";
+    if (detail.toLowerCase().includes("not found")) {
+      return {
+        message: detail.includes("Resource not found:")
+          ? `${detail} — check execution service AGENT_CONFIG_BASE_URL and that this agent exists in agent-config.`
+          : detail,
+        code,
+      };
+    }
+    return {
+      message:
+        detail ||
+        "Not found (404). Check the execution service URL (VITE_EXECUTION_BASE_URL / proxy) and path /api/v1/...",
+      code,
+    };
+  }
+  if (status === 502 || status === 503)
+    return { message: "The model gateway is unavailable right now.", code };
+  return { message: `Agent execution failed (${status}).`, code };
+}
+
+function authHeader(): Record<string, string> {
+  const token = authTokenStore.get();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function pick(row: any, ...keys: string[]) {
+  for (const key of keys) {
+    if (row && row[key] != null && row[key] !== "") return row[key];
+  }
+  return undefined;
+}
+
+async function executionFetch(path: string, init: RequestInit = {}) {
+  const sent = authTokenStore.get();
+  const r = await fetch(serviceUrl("execution", path), {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      ...(init.body ? { "Content-Type": "application/json" } : {}),
+      ...authHeader(),
+      ...(init.headers || {}),
+    },
+  });
+  const data = await parseBody(r);
+  if (r.status === 401) handleUnauthorized(sent);
+  if (!r.ok) {
+    const { message, code } = messageOf(r.status, data);
+    throw new ExecutionApiError(message, r.status, code);
+  }
+  return data;
+}
+
+export interface TestRunResult {
+  threadId: string;
+  runId: string;
+  output: string;
+  status: string;
+  error: string;
+  steps: string[];
+  startedBy: string;
+  clientIp: string;
+}
+
+function asList(data: any): any[] {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.items)) return data.items;
+  return [];
+}
+
+export const executionApi = {
+  /** Studio test only: one chat, then one message. */
+  sendTestMessage: async (
+    agentId: string,
+    input: string,
+    threadId?: string | null,
+  ): Promise<TestRunResult> => {
+    let id = threadId || "";
+    if (!id) {
+      const created = await executionFetch(
+        `/api/v1/agents/${encodeURIComponent(agentId)}/threads`,
+        {
+          method: "POST",
+          body: JSON.stringify({ executionType: "TEST" }),
+        },
+      );
+      id = String(pick(created, "threadId", "thread_id") || "");
+    }
+    const run = await executionFetch(
+      `/api/v1/agents/${encodeURIComponent(agentId)}/threads/${encodeURIComponent(id)}/runs`,
+      {
+        method: "POST",
+        body: JSON.stringify({ input, stream: false, background: false }),
+      },
+    );
+    const steps = asList(pick(run, "steps")).map((step) =>
+      typeof step === "string"
+        ? step
+        : String(step?.name || step?.detail || ""),
+    );
+    return {
+      threadId: String(pick(run, "threadId", "thread_id") || id),
+      runId: String(pick(run, "runId", "run_id") || ""),
+      output: String(pick(run, "output") || ""),
+      status: String(pick(run, "status") || "SUCCEEDED"),
+      error: String(pick(run, "error") || ""),
+      steps,
+      startedBy: String(pick(run, "startedBy", "started_by") || ""),
+      clientIp: String(pick(run, "clientIp", "client_ip") || ""),
+    };
+  },
+};
+
+export interface AuditRunItem {
+  runId: string;
+  threadId: string;
+  agentId: string;
+  status: string;
+  dispatch: string;
+  channel: string;
+  executionType: string;
+  triggeredBy: string;
+  deploymentSlug?: string | null;
+  inputPreview: string;
+  error?: string | null;
+  stopReason?: string | null;
+  attempt: number;
+  createdAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  durationMs?: number | null;
+}
+export interface AuditRunDetail extends AuditRunItem {
+  input: string;
+  output?: string | null;
+  steps: string[];
+  retrievedContext: any[];
+  toolCalls: any[];
+  manifestHash: string;
+  revisionId?: string | null;
+}
+export interface AuditFilters {
+  status?: string;
+  channel?: string;
+  executionType?: string;
+  from?: string;
+  to?: string;
+  search?: string;
+}
+
+export const auditApi = {
+  list: (agentId: string, f: AuditFilters, limit: number, offset: number) => {
+    const q = new URLSearchParams({
+      limit: String(limit),
+      offset: String(offset),
+    });
+    (Object.entries(f) as [string, string | undefined][]).forEach(
+      ([k, v]) => v && q.set(k, v),
+    );
+    return executionFetch(
+      `/api/v1/agents/${encodeURIComponent(agentId)}/audit/runs?${q}`,
+    ) as Promise<{
+      items: AuditRunItem[];
+      total: number;
+      limit: number;
+      offset: number;
+    }>;
+  },
+  get: (agentId: string, runId: string) =>
+    executionFetch(
+      `/api/v1/agents/${encodeURIComponent(agentId)}/audit/runs/${encodeURIComponent(runId)}`,
+    ) as Promise<AuditRunDetail>,
+};
+
+
+========================================================================
+FILE: frontend/src/api/workflows.ts
+ACTION: NEW FILE
+========================================================================
+import { authTokenStore } from "./authTokenStore";
+import { serviceUrl } from "../config/api";
+import { handleUnauthorized } from "./sessionGuard";
+import type {
+  WorkflowDefinition,
+  WorkflowDocument,
+  WorkflowRunRequest,
+  WorkflowRunResponse,
+  WorkflowSummary,
+  WorkflowUpsert,
+} from "../types/workflow";
+
+async function parseBody(r: Response): Promise<any> {
+  const text = await r.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { message: text };
+  }
+}
+
+function messageOf(status: number, body: any): string {
+  const code = body?.code;
+  const detail = body?.message ?? body?.detail ?? body?.title;
+  if (typeof detail === "string" && detail.trim()) {
+    return code ? `${code}: ${detail}` : detail;
+  }
+  if (status === 401) return "Session expired or token missing (401).";
+  if (status === 404) return "Workflow not found (404).";
+  if (status === 409) return detail || "Workflow conflict (409).";
+  return `Workflow request failed (${status})`;
+}
+
+async function workflowFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const sent = authTokenStore.get();
+  const r = await fetch(serviceUrl("execution", `/api/v1${path}`), {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      ...(init.body ? { "Content-Type": "application/json" } : {}),
+      ...(sent ? { Authorization: `Bearer ${sent}` } : {}),
+      ...(init.headers || {}),
+    },
+  });
+  const data = await parseBody(r);
+  if (r.status === 401) handleUnauthorized(sent);
+  if (!r.ok) throw new Error(messageOf(r.status, data));
+  return data as T;
+}
+
+function mapSummary(raw: any): WorkflowSummary {
+  return {
+    workflowId: String(raw.workflowId ?? raw.workflow_id ?? ""),
+    name: String(raw.name ?? ""),
+    status: String(raw.status ?? ""),
+    updatedAt: String(raw.updatedAt ?? raw.updated_at ?? ""),
+  };
+}
+
+function mapDocument(raw: any): WorkflowDocument {
+  const def = raw.definition ?? {};
+  return {
+    ...mapSummary(raw),
+    createdAt: String(raw.createdAt ?? raw.created_at ?? ""),
+    definition: {
+      maxSteps: def.maxSteps ?? def.max_steps ?? 30,
+      nodes: (def.nodes ?? []).map((n: any) => ({
+        id: n.id,
+        type: n.type,
+        agentId: n.agentId ?? n.agent_id,
+        input: n.input,
+        output: n.output,
+        on: n.on,
+        position: n.position,
+      })),
+      edges: (def.edges ?? []).map((e: any) => ({
+        from: e.from ?? e.from_node,
+        to: e.to ?? e.to_node,
+        when: e.when ?? "",
+        maxLoops: e.maxLoops ?? e.max_loops,
+      })),
+    },
+  };
+}
+
+/** API accepts start | agent | condition | end only */
+function toApiDefinition(def: WorkflowDefinition) {
+  const humanIds = new Set(
+    def.nodes.filter((n) => n.type === "human").map((n) => n.id),
+  );
+  if (humanIds.size > 0) {
+    throw new Error(
+      "Remove Human-in-the-loop nodes before save (runtime support coming next).",
+    );
+  }
+  return {
+    maxSteps: def.maxSteps ?? 30,
+    nodes: def.nodes.map((n) => ({
+      id: n.id,
+      type: n.type,
+      agentId: n.agentId,
+      input: n.input,
+      output: n.output,
+      on: n.on,
+      position: n.position,
+    })),
+    edges: def.edges.map((e) => ({
+      from: e.from,
+      to: e.to,
+      when: e.when ?? "",
+      maxLoops: e.maxLoops,
+    })),
+  };
+}
+
+export const workflowsApi = {
+  list: () =>
+    workflowFetch<any[]>("/workflows").then((rows) => rows.map(mapSummary)),
+
+  get: (id: string) => workflowFetch<any>(`/workflows/${id}`).then(mapDocument),
+
+  create: (body: WorkflowUpsert) =>
+    workflowFetch<any>("/workflows", {
+      method: "POST",
+      body: JSON.stringify({
+        name: body.name,
+        definition: toApiDefinition(body.definition),
+      }),
+    }).then(mapDocument),
+
+  update: (id: string, body: WorkflowUpsert) =>
+    workflowFetch<any>(`/workflows/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        name: body.name,
+        definition: toApiDefinition(body.definition),
+      }),
+    }).then(mapDocument),
+
+  publish: (id: string) =>
+    workflowFetch<any>(`/workflows/${id}/publish`, { method: "POST" }).then(
+      mapDocument,
+    ),
+
+  unpublish: (id: string) =>
+    workflowFetch<any>(`/workflows/${id}/unpublish`, { method: "POST" }).then(
+      mapDocument,
+    ),
+
+  run: (id: string, body: WorkflowRunRequest) =>
+    workflowFetch<WorkflowRunResponse>(`/workflows/${id}/runs`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+};
+
+
+========================================================================
+FILE: frontend/src/components/agents/AgentEditorForm.tsx
+ACTION: NEW FILE
+========================================================================
+import React from "react";
+import {
+  AlertCircle,
+  ChevronDown,
+  ChevronRight,
+  Save,
+  Trash2,
+  Upload,
+  XCircle,
+  Lock,
+} from "lucide-react";
+import type { KnowledgeBaseMode } from "../../types/agent";
+import type { AgentEditorController } from "./useAgentEditor";
+
+type Props = {
+  editor: AgentEditorController;
+  formId?: string;
+  showFooter?: boolean;
+  compact?: boolean;
+};
+
+export const AgentEditorForm: React.FC<Props> = ({
+  editor,
+  formId = "agent-editor-form",
+  showFooter = true,
+  compact = false,
+}) => {
+  const {
+    loading,
+    error,
+    options,
+    detail,
+    form,
+    setForm,
+    formTab,
+    setFormTab,
+    formTabs,
+    readOnly,
+    canCreate,
+    canEdit,
+    canDelete,
+    canPublish,
+    mode,
+    groupOptions,
+    singleGroup,
+    visibleModels,
+    pickerKnowledgeBases,
+    remoteServers,
+    remoteTools,
+    localTools,
+    openRemoteServerIds,
+    setOpenRemoteServerIds,
+    toggleGroup,
+    toggleKb,
+    setKbMode,
+    toggleTool,
+    save,
+    remove,
+    publish,
+    fieldClass,
+    labelClass,
+  } = editor;
+
+  const tabBtn = (active: boolean) =>
+    compact
+      ? `py-2 px-1 text-[10px] font-semibold border-b-2 whitespace-nowrap ${
+          active
+            ? "border-purple-500 text-white"
+            : "border-transparent text-slate-400"
+        }`
+      : `py-2.5 text-xs font-semibold border-b-2 whitespace-nowrap ${
+          active
+            ? "border-purple-500 text-white"
+            : "border-transparent text-slate-400"
+        }`;
+
+  if (!canCreate && mode === "create") {
+    return (
+      <div className="text-xs text-slate-500">
+        <Lock className="w-4 h-4 inline mr-1" />
+        You need create permission to add a new agent.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <form
+        id={formId}
+        onSubmit={(e) => void save(e)}
+        className="space-y-3"
+      >
+        <div
+          className={`flex items-center gap-3 border-b border-slate-800 overflow-x-auto ${compact ? "-mt-0.5" : "-mt-1"}`}
+        >
+          {formTabs.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setFormTab(t.key)}
+              className={tabBtn(formTab === t.key)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {options &&
+          (!options.availability.toolsConfigReachable ||
+            !options.availability.ragConfigReachable) && (
+            <div className="p-2 rounded-lg border border-amber-500/40 bg-amber-500/10 text-[10px] text-amber-200">
+              Tools{" "}
+              {options.availability.toolsConfigReachable ? "up" : "down"} · RAG{" "}
+              {options.availability.ragConfigReachable ? "up" : "down"}.
+            </div>
+          )}
+
+        {error && (
+          <div className="p-2 rounded-lg border border-rose-500/40 bg-rose-500/10 text-[10px] text-rose-200">
+            <AlertCircle className="w-3.5 h-3.5 inline mr-1" />
+            {error}
+          </div>
+        )}
+
+        {formTab === "access" && (
+          <div className="space-y-2">
+            <div className="text-[11px] font-semibold text-slate-300">
+              {singleGroup ? "Group" : "Groups"}
+            </div>
+            <p className="text-[10px] text-slate-500">
+              Models, knowledge bases, and tools depend on group access.
+            </p>
+            {singleGroup ? (
+              <div className="px-2.5 py-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 text-[10px] text-indigo-200">
+                {groupOptions[0].name}
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {groupOptions.map((g) => {
+                  const on = form.groupIds.includes(g.id);
+                  return (
+                    <button
+                      type="button"
+                      key={g.id}
+                      onClick={() => toggleGroup(g.id)}
+                      className={`px-2 py-1 rounded text-[10px] border transition-colors ${
+                        on
+                          ? "bg-purple-600/30 border-purple-400 text-white"
+                          : "bg-slate-800 border-slate-700 text-slate-400"
+                      }`}
+                      disabled={readOnly}
+                    >
+                      {g.name}
+                      {on ? " ✓" : ""}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {formTab === "basics" && (
+          <div className="space-y-2">
+            <div>
+              <label className={labelClass}>Agent name</label>
+              <input
+                value={form.name}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, name: e.target.value }))
+                }
+                className={fieldClass}
+                required
+                disabled={readOnly}
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Description</label>
+              <textarea
+                value={form.description}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, description: e.target.value }))
+                }
+                className={fieldClass}
+                rows={2}
+                disabled={readOnly}
+              />
+            </div>
+            <div className="grid grid-cols-1 gap-2">
+              <div>
+                <label className={labelClass}>Model</label>
+                <select
+                  value={form.modelId}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, modelId: e.target.value }))
+                  }
+                  className={fieldClass}
+                  disabled={readOnly || form.groupIds.length === 0}
+                >
+                  <option value="">
+                    {form.groupIds.length === 0
+                      ? "Choose access first"
+                      : "Select a model"}
+                  </option>
+                  {visibleModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Temperature</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  value={form.temperature}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      temperature: Number(e.target.value),
+                    }))
+                  }
+                  className={fieldClass}
+                  disabled={readOnly}
+                />
+              </div>
+            </div>
+            <div>
+              <label className={labelClass}>System prompt</label>
+              <textarea
+                value={form.systemPrompt}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, systemPrompt: e.target.value }))
+                }
+                className={fieldClass}
+                rows={compact ? 6 : 8}
+                disabled={readOnly}
+              />
+            </div>
+          </div>
+        )}
+
+        {formTab === "knowledge" && (
+          <div className="space-y-3">
+            <div>
+              <div className="text-[10px] font-semibold text-slate-300 mb-1">
+                Knowledge bases
+              </div>
+              <div className="space-y-1 max-h-36 overflow-auto rounded-lg border border-slate-800 p-2">
+                {pickerKnowledgeBases.map((kb) => {
+                  const attached = form.knowledgeBases.find(
+                    (k) => k.knowledgeBaseId === kb.id,
+                  );
+                  return (
+                    <div
+                      key={kb.id}
+                      className="flex items-center gap-2 text-[10px] text-slate-300 py-0.5"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={Boolean(attached)}
+                        onChange={() => toggleKb(kb.id)}
+                        disabled={readOnly}
+                      />
+                      <span className="flex-1 truncate">{kb.name}</span>
+                      {attached && (
+                        <select
+                          value={attached.mode}
+                          onChange={(e) =>
+                            setKbMode(kb.id, e.target.value as KnowledgeBaseMode)
+                          }
+                          className="bg-slate-800 rounded px-1 border border-slate-700 text-[10px]"
+                          disabled={readOnly}
+                        >
+                          <option value="Context">Context</option>
+                          <option value="Tool">Tool</option>
+                        </select>
+                      )}
+                    </div>
+                  );
+                })}
+                {pickerKnowledgeBases.length === 0 && (
+                  <div className="text-[10px] text-slate-500">No KBs for selected groups.</div>
+                )}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] font-semibold text-slate-300 mb-1">
+                Local tools
+              </div>
+              <div className="space-y-1 max-h-28 overflow-auto rounded-lg border border-slate-800 p-2">
+                {localTools.map((t) => (
+                  <label
+                    key={t.id}
+                    className="flex items-center gap-2 text-[10px] text-slate-300"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={form.tools.some((x) => x.toolId === t.id)}
+                      onChange={() => toggleTool(t.id, "Local")}
+                      disabled={readOnly}
+                    />
+                    {t.name}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] font-semibold text-slate-300 mb-1">
+                Remote tools
+              </div>
+              <div className="space-y-1 max-h-28 overflow-auto rounded-lg border border-slate-800 p-2">
+                {remoteServers.map((server) => {
+                  const open = openRemoteServerIds.includes(server.id);
+                  return (
+                    <div key={server.id} className="rounded border border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setOpenRemoteServerIds((c) =>
+                            c.includes(server.id)
+                              ? c.filter((id) => id !== server.id)
+                              : [...c, server.id],
+                          )
+                        }
+                        className="flex w-full items-center gap-1 px-2 py-1 text-[10px] text-slate-200 bg-slate-900/60"
+                      >
+                        {open ? (
+                          <ChevronDown className="h-3 w-3" />
+                        ) : (
+                          <ChevronRight className="h-3 w-3" />
+                        )}
+                        <span className="truncate flex-1 text-left">{server.name}</span>
+                      </button>
+                      {open &&
+                        server.tools.map((tool) => (
+                          <label
+                            key={tool.id}
+                            className="flex items-center gap-2 text-[10px] px-2 py-0.5 text-slate-300"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={form.tools.some((x) => x.toolId === tool.id)}
+                              onChange={() => toggleTool(tool.id, "Remote")}
+                              disabled={readOnly}
+                            />
+                            {tool.name}
+                          </label>
+                        ))}
+                    </div>
+                  );
+                })}
+                {remoteServers.length === 0 &&
+                  remoteTools.map((tool) => (
+                    <label
+                      key={tool.id}
+                      className="flex items-center gap-2 text-[10px] text-slate-300"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={form.tools.some((x) => x.toolId === tool.id)}
+                        onChange={() => toggleTool(tool.id, "Remote")}
+                        disabled={readOnly}
+                      />
+                      {tool.name}
+                    </label>
+                  ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {formTab === "memory" && (
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-[10px] font-semibold text-slate-300">
+              <input
+                type="checkbox"
+                checked={form.memoryEnabled}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, memoryEnabled: e.target.checked }))
+                }
+                disabled={readOnly}
+              />
+              Enable memory
+            </label>
+            {form.memoryEnabled && (
+              <div className="grid grid-cols-1 gap-2">
+                <div>
+                  <label className={labelClass}>Scope</label>
+                  <select
+                    value={form.memoryScope}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, memoryScope: e.target.value }))
+                    }
+                    className={fieldClass}
+                    disabled={readOnly}
+                  >
+                    <option value="Session">Session</option>
+                    <option value="User">User</option>
+                    <option value="Agent">Agent</option>
+                    <option value="Organization">Organization</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelClass}>Retention</label>
+                  <select
+                    value={form.memoryRetention}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, memoryRetention: e.target.value }))
+                    }
+                    className={fieldClass}
+                    disabled={readOnly}
+                  >
+                    <option value="Days7">7 days</option>
+                    <option value="Days30">30 days</option>
+                    <option value="Days90">90 days</option>
+                    <option value="Years1">1 year</option>
+                    <option value="Forever">Forever</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelClass}>Instructions</label>
+                  <textarea
+                    value={form.memoryInstructions}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        memoryInstructions: e.target.value,
+                      }))
+                    }
+                    rows={3}
+                    className={fieldClass}
+                    disabled={readOnly}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </form>
+
+      {showFooter && (
+        <div className="flex flex-wrap gap-2 pt-1 border-t border-slate-800">
+          {mode === "edit" && readOnly && (
+            <span className="text-[10px] text-slate-500 self-center">Read-only</span>
+          )}
+          {mode === "edit" && canDelete && (
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => void remove()}
+              className="px-2 py-1.5 rounded bg-rose-800 text-white text-[10px]"
+            >
+              <Trash2 className="w-3 h-3 inline" /> Delete
+            </button>
+          )}
+          {mode === "edit" && canPublish && detail?.status === "Published" && (
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => void publish(false)}
+              className="px-2 py-1.5 rounded bg-slate-700 text-white text-[10px]"
+            >
+              <XCircle className="w-3 h-3 inline" /> Unpublish
+            </button>
+          )}
+          {mode === "edit" && canPublish && detail?.status !== "Published" && (
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => void publish(true)}
+              className="px-2 py-1.5 rounded bg-emerald-700 text-white text-[10px]"
+            >
+              <Upload className="w-3 h-3 inline" /> Publish agent
+            </button>
+          )}
+          {(mode === "create" ? canCreate : canEdit) && (
+            <button
+              type="submit"
+              form={formId}
+              disabled={loading}
+              className="px-2 py-1.5 rounded bg-purple-600 text-white text-[10px] font-semibold ml-auto"
+            >
+              <Save className="w-3 h-3 inline" />
+              {mode === "create" ? "Create" : "Save agent"}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+========================================================================
+FILE: frontend/src/components/agents/AgentStudioView.tsx
+ACTION: REPLACE ENTIRE FILE
+========================================================================
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  AlertCircle,
+  Bot,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Lock,
+  Plus,
+  RefreshCw,
+  Save,
+  Trash2,
+  Upload,
+  XCircle,
+} from "lucide-react";
+import { usePlatform } from "../../context/PlatformContext";
+import { PERMISSIONS } from "../../config/permissions";
+import { agentsApi } from "../../api/agents";
+import { groupName, userGroupEntries } from "../../api/groupDirectory";
+import {
+  normalizeAgent,
+  normalizeEditorOptions,
+  toCreatePayload,
+  type AgentEditorOptionsDto,
+  type AgentKnowledgeBaseRef,
+  type AgentToolRef,
+  type AgentUi,
+  type KnowledgeBaseMode,
+} from "../../types/agent";
+import { Modal } from "../../rag/Overlays";
+import { validateAgentForm } from "./agentEditorConstants";
+
+const emptyForm = {
+  name: "",
+  description: "",
+  modelId: "",
+  temperature: 0.7,
+  systemPrompt: "You are a helpful assistant.",
+  groupIds: [] as string[],
+  knowledgeBases: [] as AgentKnowledgeBaseRef[],
+  tools: [] as AgentToolRef[],
+  memoryEnabled: false,
+  memoryScope: "User" as string,
+  memoryRetention: "Days30" as string,
+  memoryInstructions: "",
+};
+
+type FormState = typeof emptyForm;
+
+type FormTabKey = "access" | "basics" | "knowledge" | "memory";
+
+const fieldClass =
+  "w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 text-xs text-white placeholder-slate-500 " +
+  "focus:outline-none focus:border-purple-500 disabled:opacity-50";
+
+const labelClass = "block text-[11px] font-semibold text-slate-400 mb-1.5";
+
+export const AgentStudioView: React.FC = () => {
+  const {
+    agents,
+    currentUser,
+    hasPermission,
+    reloadPlatformData,
+    showNotification,
+  } = usePlatform();
+
+  const canCreate = hasPermission(PERMISSIONS.Agent.Create);
+  const canEdit = hasPermission(PERMISSIONS.Agent.Edit);
+  const canDelete = hasPermission(PERMISSIONS.Agent.Delete);
+  const canPublish = hasPermission(PERMISSIONS.Agent.Publish);
+
+  /* GROUPS COME FROM THE SIGNED-IN TOKEN ONLY (U).
+     `usePlatform().groups` is overwritten with the full admin directory once
+     the Users / Groups screens are opened, so it can list groups this person
+     does not belong to - even for a Super Admin. The login response is the
+     one source that says which groups the caller is actually in. */
+  const myGroups = useMemo(
+    () =>
+      userGroupEntries(currentUser?.groups).map((g) => ({
+        id: g.id,
+        name: g.name || groupName(g.id),
+      })),
+    [currentUser],
+  );
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [options, setOptions] = useState<AgentEditorOptionsDto | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<AgentUi | null>(null);
+  const [mode, setMode] = useState<"create" | "edit">("create");
+  const [form, setForm] = useState<FormState>(emptyForm);
+  const [formTab, setFormTab] = useState<FormTabKey>("access");
+  const [modalOpen, setModalOpen] = useState(false);
+  const [openRemoteServerIds, setOpenRemoteServerIds] = useState<string[]>([]);
+
+  const readOnly = mode === "edit" && !canEdit;
+
+  /* Groups offered on the Access tab: mine, plus any group already on the
+     agent being edited (so an existing grant is shown, never silently
+     dropped). */
+  const groupOptions = useMemo(() => {
+    const known = new Set(myGroups.map((g) => g.id));
+
+    const extras = form.groupIds
+      .filter((id) => !known.has(id))
+      .map((id) => ({ id, name: groupName(id) }));
+
+    return [...myGroups, ...extras];
+  }, [myGroups, form.groupIds]);
+
+  const singleGroup = groupOptions.length === 1;
+
+  /*
+   * The server is now authoritative for resource filtering.
+   *
+   * /editor-options?groupIds=... returns only the models, knowledge bases,
+   * and tools available to the selected groups.
+   *
+   * Therefore the client does NOT perform another group-based filtering pass.
+   */
+  const visibleModels = useMemo(() => options?.models ?? [], [options]);
+
+  const pickerKnowledgeBases = useMemo(
+    () => options?.knowledgeBases ?? [],
+    [options],
+  );
+
+  const remoteServers = useMemo(
+    () => options?.remoteMcpServers ?? [],
+    [options],
+  );
+
+  const remoteTools = useMemo(
+    () =>
+      remoteServers.length > 0
+        ? remoteServers.flatMap((server) =>
+            server.tools.map((tool) => ({
+              id: tool.id,
+              name: tool.name,
+              toolType: "Remote",
+              groupIds: server.groupIds,
+            })),
+          )
+        : (options?.tools ?? []).filter((t) => t.toolType === "Remote"),
+    [options, remoteServers],
+  );
+
+  const localTools = useMemo(
+    () => (options?.tools ?? []).filter((t) => t.toolType !== "Remote"),
+    [options],
+  );
+
+  const loadOptions = async (groupIds: string[]) => {
+    try {
+      const next = normalizeEditorOptions(
+        await agentsApi.getEditorOptions(groupIds),
+      );
+
+      setOptions(next);
+
+      setForm((current) => {
+        const modelIds = new Set((next.models ?? []).map((m) => m.id));
+
+        const kbIds = new Set((next.knowledgeBases ?? []).map((k) => k.id));
+
+        const toolIds = new Set([
+          ...(next.tools ?? []).map((t) => t.id),
+          ...(next.remoteMcpServers ?? []).flatMap((server) =>
+            server.tools.map((tool) => tool.id),
+          ),
+        ]);
+
+        return {
+          ...current,
+          modelId: modelIds.has(current.modelId) ? current.modelId : "",
+          knowledgeBases: current.knowledgeBases.filter((k) =>
+            kbIds.has(k.knowledgeBaseId),
+          ),
+          tools: current.tools.filter((t) => toolIds.has(t.toolId)),
+        };
+      });
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Failed to load editor options (models / KBs / tools).",
+      );
+    }
+  };
+
+  /*
+   * The sorted group selection is used as the dependency key.
+   * This means:
+   *
+   * [A, B] === [B, A]
+   *
+   * from the API-fetch perspective, so changing checkbox order does not
+   * trigger an unnecessary reload.
+   */
+  const groupKey = form.groupIds.slice().sort().join(",");
+
+  useEffect(() => {
+    if (!modalOpen) return;
+
+    void loadOptions(form.groupIds);
+
+    // groupKey is the sorted selection, so order of clicks does not refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupKey]);
+
+  /*
+   * One group available: pre-select it when creating.
+   */
+  useEffect(() => {
+    if (mode === "create" && singleGroup && form.groupIds.length === 0) {
+      setForm((f) => ({
+        ...f,
+        groupIds: [groupOptions[0].id],
+      }));
+    }
+  }, [mode, singleGroup, groupOptions, form.groupIds.length]);
+
+  const refresh = async () => {
+    setLoading(true);
+    setError("");
+
+    try {
+      await Promise.all([reloadPlatformData(), loadOptions(form.groupIds)]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load agents.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openCreate = () => {
+    const initialGroups = myGroups[0]?.id ? [myGroups[0].id] : [];
+
+    setMode("create");
+    setSelectedId(null);
+    setDetail(null);
+    setFormTab("basics");
+
+    setForm({
+      ...emptyForm,
+      groupIds: initialGroups,
+    });
+
+    setError("");
+    setModalOpen(true);
+  };
+
+  const openEdit = async (id: string) => {
+    setError("");
+    setFormTab("basics");
+    setModalOpen(true);
+    setMode("edit");
+    setSelectedId(id);
+    setLoading(true);
+
+    try {
+      const dto = await agentsApi.getAgent(id);
+      const agent = normalizeAgent(dto);
+
+      setDetail(agent);
+
+      setForm({
+        name: agent.name,
+        description: agent.description,
+        modelId: agent.modelId,
+        temperature: agent.temperature,
+        systemPrompt: agent.systemPrompt,
+        groupIds: agent.groupIds,
+        knowledgeBases: agent.knowledgeBases,
+        tools: agent.tools,
+        memoryEnabled: agent.memoryEnabled,
+        memoryScope: agent.memoryScope || "User",
+        memoryRetention: agent.memoryRetention || "Days30",
+        memoryInstructions: agent.memoryInstructions,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load agent.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const closeModal = () => {
+    setModalOpen(false);
+    setError("");
+  };
+
+  const toggleGroup = (id: string) => {
+    setForm((f) => ({
+      ...f,
+      groupIds: f.groupIds.includes(id)
+        ? f.groupIds.filter((g) => g !== id)
+        : [...f.groupIds, id],
+    }));
+  };
+
+  const toggleKb = (id: string) => {
+    setForm((f) => {
+      const exists = f.knowledgeBases.find((k) => k.knowledgeBaseId === id);
+
+      if (exists) {
+        return {
+          ...f,
+          knowledgeBases: f.knowledgeBases.filter(
+            (k) => k.knowledgeBaseId !== id,
+          ),
+        };
+      }
+
+      return {
+        ...f,
+        knowledgeBases: [
+          ...f.knowledgeBases,
+          {
+            knowledgeBaseId: id,
+            mode: "Context",
+          },
+        ],
+      };
+    });
+  };
+
+  const setKbMode = (id: string, kbMode: KnowledgeBaseMode) => {
+    setForm((f) => ({
+      ...f,
+      knowledgeBases: f.knowledgeBases.map((k) =>
+        k.knowledgeBaseId === id ? { ...k, mode: kbMode } : k,
+      ),
+    }));
+  };
+
+  const toggleTool = (id: string, toolType: string) => {
+    setForm((f) => {
+      const exists = f.tools.find((t) => t.toolId === id);
+
+      if (exists) {
+        return {
+          ...f,
+          tools: f.tools.filter((t) => t.toolId !== id),
+        };
+      }
+
+      return {
+        ...f,
+        tools: [
+          ...f.tools,
+          {
+            toolId: id,
+            toolType,
+          },
+        ],
+      };
+    });
+  };
+
+  const payload = () => toCreatePayload(form);
+
+  /*
+   * Which tab a validation problem lives on, so a failed save can jump the
+   * reader straight to the field that needs fixing. Groups are checked first
+   * because the resource lists depend on them.
+   */
+  const validate = () => validateAgentForm(form);
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    const problem = validate();
+
+    if (problem) {
+      setFormTab(problem.tab);
+      setError(problem.message);
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+
+    try {
+      if (mode === "create") {
+        const created = await agentsApi.createAgent(payload());
+
+        showNotification?.(`Created ${created.name}`);
+
+        await reloadPlatformData();
+        await openEdit(created.id);
+      } else if (selectedId) {
+        const updated = await agentsApi.patchAgent(selectedId, payload());
+
+        showNotification?.(`Saved ${updated.name}`);
+
+        setDetail(normalizeAgent(updated));
+        await reloadPlatformData();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!selectedId || !canDelete) return;
+
+    if (!window.confirm("Delete this agent?")) return;
+
+    setLoading(true);
+    setError("");
+
+    try {
+      await agentsApi.deleteAgent(selectedId);
+
+      showNotification?.("Agent deleted.");
+
+      closeModal();
+
+      await reloadPlatformData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const publish = async (publish: boolean) => {
+    if (!selectedId || !canPublish) return;
+
+    setLoading(true);
+    setError("");
+
+    try {
+      const dto = publish
+        ? await agentsApi.publishAgent(selectedId)
+        : await agentsApi.unpublishAgent(selectedId);
+
+      setDetail(normalizeAgent(dto));
+
+      await reloadPlatformData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Publish failed.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Access comes first: the resources on the other tabs depend on it.
+  const formTabs: {
+    key: FormTabKey;
+    label: string;
+  }[] = [
+    {
+      key: "access",
+      label: singleGroup ? "Access" : `Access (${form.groupIds.length})`,
+    },
+    {
+      key: "basics",
+      label: "Basics",
+    },
+    {
+      key: "knowledge",
+      label: `Knowledge & tools (${
+        form.knowledgeBases.length + form.tools.length
+      })`,
+    },
+    {
+      key: "memory",
+      label: form.memoryEnabled ? "Memory (on)" : "Memory",
+    },
+  ];
+
+  return (
+    <div className="p-6 max-w-7xl mx-auto space-y-6">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <div className="text-xs font-semibold text-purple-300">
+            Agent Service
+          </div>
+
+          <h1 className="text-2xl font-bold text-white">Agent Studio</h1>
+
+          <p className="text-xs text-slate-400 mt-1">
+            Create and configure agents against Agent Config. Models, knowledge
+            bases, and tools are validated downstream using your session token.
+          </p>
+        </div>
+
+        <div className="flex gap-2">
+          {canCreate && (
+            <button
+              type="button"
+              onClick={openCreate}
+              className="px-3 py-2 rounded bg-purple-600 text-white text-xs"
+            >
+              <Plus className="w-4 h-4 inline mr-1" />
+              New
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={loading}
+            className="px-3 py-2 rounded bg-slate-800 text-slate-200 text-xs"
+          >
+            <RefreshCw
+              className={`w-4 h-4 inline mr-1 ${loading ? "animate-spin" : ""}`}
+            />
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {options &&
+        (!options.availability.toolsConfigReachable ||
+          !options.availability.ragConfigReachable) && (
+          <div className="p-3 rounded-lg border border-amber-500/40 bg-amber-500/10 text-xs text-amber-200">
+            Downstream: Tools{" "}
+            {options.availability.toolsConfigReachable ? "up" : "down"} · RAG{" "}
+            {options.availability.ragConfigReachable ? "up" : "down"}.
+            Create/save will fail with 503 while a required service is down.
+          </div>
+        )}
+
+      <div className="space-y-3">
+        {agents.length === 0 && (
+          <div className="p-8 rounded-xl border border-dashed border-slate-800 text-center text-xs text-slate-500">
+            No agents visible to your groups.
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {agents.map((agent) => (
+            <button
+              type="button"
+              key={agent.id}
+              onClick={() => void openEdit(agent.id)}
+              className={`text-left p-4 rounded-xl border transition-colors ${
+                selectedId === agent.id && modalOpen
+                  ? "bg-slate-800 border-purple-500/50"
+                  : "bg-slate-900 border-slate-800 hover:border-slate-700"
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <Bot className="w-5 h-5 text-purple-400 mt-0.5 shrink-0" />
+
+                <div className="min-w-0">
+                  <div className="font-semibold text-white text-sm truncate">
+                    {agent.name}
+                  </div>
+
+                  <div className="text-[11px] text-slate-500">
+                    {agent.status || "Draft"} · {agent.ownerUsername || "—"}
+                  </div>
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <Modal
+        open={modalOpen}
+        onClose={closeModal}
+        size="lg"
+        title={
+          mode === "create"
+            ? "Create agent"
+            : `Configure · ${detail?.name ?? ""}`
+        }
+        subtitle={
+          detail ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded bg-slate-800 text-slate-300">
+                {detail.status}
+              </span>
+            </span>
+          ) : undefined
+        }
+        footer={
+          !canCreate && mode === "create" ? undefined : (
+            <>
+              {mode === "edit" && !canEdit && (
+                <span className="text-[11px] text-slate-500 self-center mr-auto">
+                  <Check className="w-3 h-3 inline mr-1" />
+                  Read-only
+                </span>
+              )}
+
+              {mode === "edit" && canDelete && (
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => void remove()}
+                  className="px-3.5 py-2 rounded-lg bg-rose-800 hover:bg-rose-700 text-white text-xs transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5 inline mr-1" />
+                  Delete
+                </button>
+              )}
+
+              {mode === "edit" &&
+                canPublish &&
+                detail?.status === "Published" && (
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => void publish(false)}
+                    className="px-3.5 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs transition-colors"
+                  >
+                    <XCircle className="w-3.5 h-3.5 inline mr-1" />
+                    Unpublish
+                  </button>
+                )}
+
+              {mode === "edit" &&
+                canPublish &&
+                detail?.status !== "Published" && (
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => void publish(true)}
+                    className="px-3.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs transition-colors"
+                  >
+                    <Upload className="w-3.5 h-3.5 inline mr-1" />
+                    Publish
+                  </button>
+                )}
+
+              {(mode === "create" ? canCreate : canEdit) && (
+                <button
+                  type="submit"
+                  form="agent-studio-form"
+                  disabled={loading}
+                  className="px-3.5 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold transition-colors"
+                >
+                  <Save className="w-3.5 h-3.5 inline mr-1" />
+
+                  {mode === "create" ? "Create" : "Save"}
+                </button>
+              )}
+            </>
+          )
+        }
+      >
+        {!canCreate && mode === "create" ? (
+          <div className="text-xs text-slate-500">
+            <Lock className="w-4 h-4 inline mr-1" />
+            You have view access only. Open an existing agent to inspect it.
+          </div>
+        ) : (
+          <form id="agent-studio-form" onSubmit={save} className="space-y-3">
+            {/* Tab strip */}
+            <div className="flex items-center gap-4 border-b border-slate-800 overflow-x-auto -mt-1">
+              {formTabs.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => setFormTab(t.key)}
+                  className={`py-2.5 text-xs font-semibold border-b-2 whitespace-nowrap ${
+                    formTab === t.key
+                      ? "border-purple-500 text-white"
+                      : "border-transparent text-slate-400"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {error && (
+              <div className="p-3 rounded-lg border border-rose-500/40 bg-rose-500/10 text-xs text-rose-200">
+                <AlertCircle className="w-4 h-4 inline mr-1" />
+                {error}
+              </div>
+            )}
+
+            {formTab === "access" && (
+              <div className="space-y-2">
+                <div className="text-[11px] font-semibold text-slate-300">
+                  {singleGroup ? "Group" : "Groups"}
+                </div>
+
+                <p className="text-[11px] text-slate-500">
+                  Choose who can use this agent. Only groups you belong to are
+                  listed. The models, knowledge bases and tools you can pick
+                  depend on this choice.
+                </p>
+
+                {singleGroup ? (
+                  <div className="px-2.5 py-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 text-[11px] text-indigo-200">
+                    {groupOptions[0].name}
+
+                    <span className="text-slate-500 ml-2">
+                      Assigned from your sign-in
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {groupOptions.map((g) => {
+                      const on = form.groupIds.includes(g.id);
+
+                      return (
+                        <button
+                          type="button"
+                          key={g.id}
+                          onClick={() => toggleGroup(g.id)}
+                          className={`px-2.5 py-1.5 rounded text-[11px] border transition-colors ${
+                            on
+                              ? "bg-purple-600/30 border-purple-400 text-white"
+                              : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                          }`}
+                          disabled={readOnly}
+                        >
+                          {g.name}
+                          {on ? " ✓" : ""}
+                        </button>
+                      );
+                    })}
+
+                    {groupOptions.length === 0 && (
+                      <span className="text-[11px] text-slate-500">
+                        No groups found for this account. Ask an administrator
+                        to add you to a group, then sign in again.
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {form.groupIds.length > 0 && (
+                  <p className="text-[11px] text-slate-500">
+                    Available for this selection: {visibleModels.length} model
+                    {visibleModels.length === 1 ? "" : "s"},{" "}
+                    {pickerKnowledgeBases.length} knowledge base
+                    {pickerKnowledgeBases.length === 1 ? "" : "s"},{" "}
+                    {localTools.length + remoteTools.length} tool
+                    {localTools.length + remoteTools.length === 1 ? "" : "s"}.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {formTab === "basics" && (
+              <div className="space-y-3">
+                <div>
+                  <label className={labelClass}>Agent name</label>
+
+                  <input
+                    value={form.name}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        name: e.target.value,
+                      }))
+                    }
+                    placeholder="Agent name"
+                    className={fieldClass}
+                    required
+                    disabled={readOnly}
+                  />
+                </div>
+
+                <div>
+                  <label className={labelClass}>Description</label>
+
+                  <textarea
+                    value={form.description}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        description: e.target.value,
+                      }))
+                    }
+                    placeholder="What this agent is for"
+                    className={fieldClass}
+                    rows={2}
+                    disabled={readOnly}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className={labelClass}>Model</label>
+
+                    <select
+                      value={form.modelId}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          modelId: e.target.value,
+                        }))
+                      }
+                      className={fieldClass}
+                      disabled={readOnly || form.groupIds.length === 0}
+                    >
+                      <option value="">
+                        {form.groupIds.length === 0
+                          ? "Choose access first"
+                          : "Select a model"}
+                      </option>
+
+                      {visibleModels.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name} ({m.modelIdentifier}) ·{" "}
+                          {m.groupIds?.length
+                            ? m.groupIds.map(groupName).join(", ")
+                            : "all groups"}
+                        </option>
+                      ))}
+                    </select>
+
+                    {form.groupIds.length === 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setFormTab("access")}
+                        className="text-[10px] text-purple-300 hover:underline mt-1"
+                      >
+                        Go to Access
+                      </button>
+                    )}
+
+                    {form.groupIds.length > 0 && visibleModels.length === 0 && (
+                      <p className="text-[10px] text-amber-400 mt-1">
+                        No models are available to the selected group(s).
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className={labelClass}>Temperature (0–2)</label>
+
+                    <input
+                      type="number"
+                      min={0}
+                      max={2}
+                      step={0.1}
+                      value={form.temperature}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          temperature: Number(e.target.value),
+                        }))
+                      }
+                      className={fieldClass}
+                      disabled={readOnly}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className={labelClass}>System prompt</label>
+
+                  <textarea
+                    value={form.systemPrompt}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        systemPrompt: e.target.value,
+                      }))
+                    }
+                    className={fieldClass}
+                    rows={8}
+                    disabled={readOnly}
+                  />
+                </div>
+              </div>
+            )}
+            {formTab === "knowledge" && (
+              <div className="space-y-5">
+                <div>
+                  <div className="text-[11px] font-semibold text-slate-300 mb-1.5">
+                    Knowledge bases
+                  </div>
+
+                  <div className="space-y-1 max-h-44 overflow-auto rounded-lg border border-slate-800 p-2">
+                    {pickerKnowledgeBases.map((kb) => {
+                      const attached = form.knowledgeBases.find(
+                        (k) => k.knowledgeBaseId === kb.id,
+                      );
+
+                      return (
+                        <div
+                          key={kb.id}
+                          className="flex items-center gap-2 text-[11px] text-slate-300 py-1"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={Boolean(attached)}
+                            onChange={() => toggleKb(kb.id)}
+                            disabled={readOnly}
+                          />
+
+                          <span className="flex-1 truncate">
+                            {kb.name} · {kb.strategyName}
+                          </span>
+
+                          {attached && (
+                            <select
+                              value={attached.mode}
+                              onChange={(e) =>
+                                setKbMode(
+                                  kb.id,
+                                  e.target.value as KnowledgeBaseMode,
+                                )
+                              }
+                              className="bg-slate-800 rounded px-1 py-0.5 border border-slate-700"
+                              disabled={readOnly}
+                            >
+                              <option value="Context">Context</option>
+
+                              <option value="Tool">Tool</option>
+                            </select>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {pickerKnowledgeBases.length === 0 && (
+                      <div className="text-[11px] text-slate-500 py-2">
+                        No knowledge bases are available to the selected
+                        group(s).
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <div className="text-[11px] font-semibold text-slate-300 mb-1.5">
+                      Local tools
+                    </div>
+
+                    <div className="space-y-1 max-h-40 overflow-auto rounded-lg border border-slate-800 p-2">
+                      {localTools.map((t) => (
+                        <label
+                          key={t.id}
+                          className="flex items-center gap-2 text-[11px] text-slate-300 py-1"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={form.tools.some((x) => x.toolId === t.id)}
+                            onChange={() => toggleTool(t.id, "Local")}
+                            disabled={readOnly}
+                          />
+
+                          {t.name}
+                        </label>
+                      ))}
+
+                      {localTools.length === 0 && (
+                        <div className="text-[11px] text-slate-500 py-2">
+                          No approved local tools for the selected group(s).
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-[11px] font-semibold text-slate-300 mb-1.5">
+                      Remote tools
+                    </div>
+
+                    <div className="space-y-2 max-h-40 overflow-auto rounded-lg border border-slate-800 p-2">
+                      {remoteServers.map((server) => {
+                        const open = openRemoteServerIds.includes(server.id);
+                        const selectedCount = server.tools.filter((tool) =>
+                          form.tools.some((item) => item.toolId === tool.id),
+                        ).length;
+
+                        return (
+                          <div
+                            key={server.id}
+                            className="rounded-md border border-slate-800"
+                          >
+                            <button
+                              type="button"
+                              aria-expanded={open}
+                              onClick={() =>
+                                setOpenRemoteServerIds((current) =>
+                                  current.includes(server.id)
+                                    ? current.filter((id) => id !== server.id)
+                                    : [...current, server.id],
+                                )
+                              }
+                              className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[11px] font-semibold text-slate-200 bg-slate-900/60"
+                            >
+                              {open ? (
+                                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                              ) : (
+                                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                              )}
+                              <span className="min-w-0 flex-1 truncate">
+                                {server.name}
+                              </span>
+                              <span className="text-[10px] font-medium text-slate-500">
+                                {selectedCount}/{server.tools.length}
+                              </span>
+                            </button>
+
+                            {open && (
+                              <div className="space-y-1 border-t border-slate-800 p-2">
+                                {server.tools.map((tool) => (
+                                  <label
+                                    key={tool.id}
+                                    className="flex items-center gap-2 text-[11px] text-slate-300 py-1"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={form.tools.some(
+                                        (item) => item.toolId === tool.id,
+                                      )}
+                                      onChange={() =>
+                                        toggleTool(tool.id, "Remote")
+                                      }
+                                      disabled={readOnly}
+                                    />
+                                    {tool.name}
+                                  </label>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+
+                      {remoteServers.length === 0 &&
+                        remoteTools.map((tool) => (
+                          <label
+                            key={tool.id}
+                            className="flex items-center gap-2 text-[11px] text-slate-300 py-1"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={form.tools.some(
+                                (item) => item.toolId === tool.id,
+                              )}
+                              onChange={() => toggleTool(tool.id, "Remote")}
+                              disabled={readOnly}
+                            />
+                            {tool.name}
+                          </label>
+                        ))}
+
+                      {remoteTools.length === 0 && (
+                        <div className="text-[11px] text-slate-500 py-2">
+                          No active remote tools for the selected group(s).
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {formTab === "memory" && (
+              <div className="space-y-3">
+                <label className="flex items-center gap-2 text-xs font-semibold text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={form.memoryEnabled}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        memoryEnabled: e.target.checked,
+                      }))
+                    }
+                    disabled={readOnly}
+                    className="rounded border-slate-700 bg-slate-800 accent-purple-500"
+                  />
+                  Enable memory
+                </label>
+
+                {form.memoryEnabled && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <div>
+                      <label className={labelClass}>Scope</label>
+
+                      <select
+                        value={form.memoryScope}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            memoryScope: e.target.value,
+                          }))
+                        }
+                        className={fieldClass}
+                        disabled={readOnly}
+                      >
+                        <option value="Session">Session</option>
+
+                        <option value="User">User</option>
+
+                        <option value="Agent">Agent</option>
+
+                        <option value="Organization">Organization</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className={labelClass}>Retention</label>
+
+                      <select
+                        value={form.memoryRetention}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            memoryRetention: e.target.value,
+                          }))
+                        }
+                        className={fieldClass}
+                        disabled={readOnly}
+                      >
+                        <option value="Session">Session only</option>
+
+                        <option value="Days7">7 days</option>
+
+                        <option value="Days30">30 days</option>
+
+                        <option value="Days90">90 days</option>
+
+                        <option value="Years1">1 year</option>
+
+                        <option value="Forever">Forever</option>
+                      </select>
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className={labelClass}>
+                        Instructions (optional)
+                      </label>
+
+                      <textarea
+                        value={form.memoryInstructions}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            memoryInstructions: e.target.value,
+                          }))
+                        }
+                        placeholder="What should this agent remember?"
+                        rows={4}
+                        className={fieldClass}
+                        disabled={readOnly}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </form>
+        )}
+      </Modal>
+    </div>
+  );
+};
+
+
+========================================================================
+FILE: frontend/src/components/agents/agentEditorConstants.ts
+ACTION: NEW FILE
+========================================================================
+import type { AgentKnowledgeBaseRef, AgentToolRef } from "../../types/agent";
+
+export const emptyAgentForm = {
+  name: "",
+  description: "",
+  modelId: "",
+  temperature: 0.7,
+  systemPrompt: "You are a helpful assistant.",
+  groupIds: [] as string[],
+  knowledgeBases: [] as AgentKnowledgeBaseRef[],
+  tools: [] as AgentToolRef[],
+  memoryEnabled: false,
+  memoryScope: "User" as string,
+  memoryRetention: "Days30" as string,
+  memoryInstructions: "",
+};
+
+export type AgentFormState = typeof emptyAgentForm;
+
+export type AgentFormTabKey = "access" | "basics" | "knowledge" | "memory";
+
+export const agentFieldClass =
+  "w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 text-xs text-white placeholder-slate-500 " +
+  "focus:outline-none focus:border-purple-500 disabled:opacity-50";
+
+export const agentLabelClass = "block text-[11px] font-semibold text-slate-400 mb-1.5";
+
+export function validateAgentForm(form: AgentFormState): {
+  tab: AgentFormTabKey;
+  message: string;
+} | null {
+  if (form.groupIds.length === 0) {
+    return {
+      tab: "access",
+      message:
+        "Select at least one group first. The available models, knowledge bases and tools depend on it.",
+    };
+  }
+  if (!form.name.trim()) {
+    return { tab: "basics", message: "Give the agent a name." };
+  }
+  if (!form.modelId) {
+    return { tab: "basics", message: "Select a model." };
+  }
+  if (!form.systemPrompt.trim()) {
+    return { tab: "basics", message: "System prompt is required." };
+  }
+  if (form.memoryEnabled && !form.memoryScope) {
+    return {
+      tab: "memory",
+      message: "Choose a memory scope, or turn memory off.",
+    };
+  }
+  if (form.memoryEnabled && !form.memoryRetention) {
+    return {
+      tab: "memory",
+      message: "Choose a memory retention period, or turn memory off.",
+    };
+  }
+  return null;
+}
+
+
+========================================================================
+FILE: frontend/src/components/agents/useAgentEditor.ts
+ACTION: NEW FILE
+========================================================================
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { agentsApi } from "../../api/agents";
+import { groupName, userGroupEntries } from "../../api/groupDirectory";
+import {
+  normalizeAgent,
+  normalizeEditorOptions,
+  toCreatePayload,
+  type AgentEditorOptionsDto,
+  type AgentUi,
+  type KnowledgeBaseMode,
+} from "../../types/agent";
+import { usePlatform } from "../../context/PlatformContext";
+import { PERMISSIONS } from "../../config/permissions";
+import {
+  agentFieldClass,
+  agentLabelClass,
+  emptyAgentForm,
+  validateAgentForm,
+  type AgentFormState,
+  type AgentFormTabKey,
+} from "./agentEditorConstants";
+
+export type UseAgentEditorOptions = {
+  agentId: string | null;
+  mode: "create" | "edit";
+  /** When true, load runs when agentId is set (edit mode). */
+  autoLoad?: boolean;
+};
+
+export function useAgentEditor({
+  agentId,
+  mode,
+  autoLoad = true,
+}: UseAgentEditorOptions) {
+  const {
+    currentUser,
+    hasPermission,
+    reloadPlatformData,
+    showNotification,
+  } = usePlatform();
+
+  const canCreate = hasPermission(PERMISSIONS.Agent.Create);
+  const canEdit = hasPermission(PERMISSIONS.Agent.Edit);
+  const canDelete = hasPermission(PERMISSIONS.Agent.Delete);
+  const canPublish = hasPermission(PERMISSIONS.Agent.Publish);
+
+  const myGroups = useMemo(
+    () =>
+      userGroupEntries(currentUser?.groups).map((g) => ({
+        id: g.id,
+        name: g.name || groupName(g.id),
+      })),
+    [currentUser],
+  );
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [options, setOptions] = useState<AgentEditorOptionsDto | null>(null);
+  const [detail, setDetail] = useState<AgentUi | null>(null);
+  const [form, setForm] = useState<AgentFormState>(emptyAgentForm);
+  const [formTab, setFormTab] = useState<AgentFormTabKey>("basics");
+  const [openRemoteServerIds, setOpenRemoteServerIds] = useState<string[]>([]);
+
+  const readOnly = mode === "edit" && !canEdit;
+
+  const groupOptions = useMemo(() => {
+    const known = new Set(myGroups.map((g) => g.id));
+    const extras = form.groupIds
+      .filter((id) => !known.has(id))
+      .map((id) => ({ id, name: groupName(id) }));
+    return [...myGroups, ...extras];
+  }, [myGroups, form.groupIds]);
+
+  const singleGroup = groupOptions.length === 1;
+  const visibleModels = useMemo(() => options?.models ?? [], [options]);
+  const pickerKnowledgeBases = useMemo(
+    () => options?.knowledgeBases ?? [],
+    [options],
+  );
+  const remoteServers = useMemo(
+    () => options?.remoteMcpServers ?? [],
+    [options],
+  );
+  const remoteTools = useMemo(
+    () =>
+      remoteServers.length > 0
+        ? remoteServers.flatMap((server) =>
+            server.tools.map((tool) => ({
+              id: tool.id,
+              name: tool.name,
+              toolType: "Remote",
+              groupIds: server.groupIds,
+            })),
+          )
+        : (options?.tools ?? []).filter((t) => t.toolType === "Remote"),
+    [options, remoteServers],
+  );
+  const localTools = useMemo(
+    () => (options?.tools ?? []).filter((t) => t.toolType !== "Remote"),
+    [options],
+  );
+
+  const loadOptions = useCallback(async (groupIds: string[]) => {
+    try {
+      const next = normalizeEditorOptions(
+        await agentsApi.getEditorOptions(groupIds),
+      );
+      setOptions(next);
+      setForm((current) => {
+        const modelIds = new Set((next.models ?? []).map((m) => m.id));
+        const kbIds = new Set((next.knowledgeBases ?? []).map((k) => k.id));
+        const toolIds = new Set([
+          ...(next.tools ?? []).map((t) => t.id),
+          ...(next.remoteMcpServers ?? []).flatMap((server) =>
+            server.tools.map((tool) => tool.id),
+          ),
+        ]);
+        return {
+          ...current,
+          modelId: modelIds.has(current.modelId) ? current.modelId : "",
+          knowledgeBases: current.knowledgeBases.filter((k) =>
+            kbIds.has(k.knowledgeBaseId),
+          ),
+          tools: current.tools.filter((t) => toolIds.has(t.toolId)),
+        };
+      });
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Failed to load editor options (models / KBs / tools).",
+      );
+    }
+  }, []);
+
+  const groupKey = form.groupIds.slice().sort().join(",");
+
+  useEffect(() => {
+    void loadOptions(form.groupIds);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupKey]);
+
+  useEffect(() => {
+    if (mode === "create" && singleGroup && form.groupIds.length === 0) {
+      setForm((f) => ({ ...f, groupIds: [groupOptions[0].id] }));
+    }
+  }, [mode, singleGroup, groupOptions, form.groupIds.length]);
+
+  const loadAgent = useCallback(async (id: string) => {
+    setError("");
+    setLoading(true);
+    try {
+      const dto = await agentsApi.getAgent(id);
+      const agent = normalizeAgent(dto);
+      setDetail(agent);
+      setForm({
+        name: agent.name,
+        description: agent.description,
+        modelId: agent.modelId,
+        temperature: agent.temperature,
+        systemPrompt: agent.systemPrompt,
+        groupIds: agent.groupIds,
+        knowledgeBases: agent.knowledgeBases,
+        tools: agent.tools,
+        memoryEnabled: agent.memoryEnabled,
+        memoryScope: agent.memoryScope || "User",
+        memoryRetention: agent.memoryRetention || "Days30",
+        memoryInstructions: agent.memoryInstructions,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load agent.");
+      setDetail(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!autoLoad || mode !== "edit" || !agentId) return;
+    void loadAgent(agentId);
+  }, [agentId, mode, autoLoad, loadAgent]);
+
+  const resetCreate = useCallback(() => {
+    const initialGroups = myGroups[0]?.id ? [myGroups[0].id] : [];
+    setDetail(null);
+    setFormTab("basics");
+    setError("");
+    setForm({ ...emptyAgentForm, groupIds: initialGroups });
+  }, [myGroups]);
+
+  const toggleGroup = (id: string) => {
+    setForm((f) => ({
+      ...f,
+      groupIds: f.groupIds.includes(id)
+        ? f.groupIds.filter((g) => g !== id)
+        : [...f.groupIds, id],
+    }));
+  };
+
+  const toggleKb = (id: string) => {
+    setForm((f) => {
+      const exists = f.knowledgeBases.find((k) => k.knowledgeBaseId === id);
+      if (exists) {
+        return {
+          ...f,
+          knowledgeBases: f.knowledgeBases.filter(
+            (k) => k.knowledgeBaseId !== id,
+          ),
+        };
+      }
+      return {
+        ...f,
+        knowledgeBases: [...f.knowledgeBases, { knowledgeBaseId: id, mode: "Context" }],
+      };
+    });
+  };
+
+  const setKbMode = (id: string, kbMode: KnowledgeBaseMode) => {
+    setForm((f) => ({
+      ...f,
+      knowledgeBases: f.knowledgeBases.map((k) =>
+        k.knowledgeBaseId === id ? { ...k, mode: kbMode } : k,
+      ),
+    }));
+  };
+
+  const toggleTool = (id: string, toolType: string) => {
+    setForm((f) => {
+      const exists = f.tools.find((t) => t.toolId === id);
+      if (exists) {
+        return { ...f, tools: f.tools.filter((t) => t.toolId !== id) };
+      }
+      return { ...f, tools: [...f.tools, { toolId: id, toolType }] };
+    });
+  };
+
+  const save = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    const problem = validateAgentForm(form);
+    if (problem) {
+      setFormTab(problem.tab);
+      setError(problem.message);
+      return null;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const payload = toCreatePayload(form);
+      if (mode === "create") {
+        if (!canCreate) {
+          setError("You do not have permission to create agents.");
+          return null;
+        }
+        const created = await agentsApi.createAgent(payload);
+        showNotification?.(`Created ${created.name}`);
+        await reloadPlatformData();
+        const ui = normalizeAgent(created);
+        setDetail(ui);
+        return ui;
+      }
+      if (!agentId) return null;
+      const updated = await agentsApi.patchAgent(agentId, payload);
+      showNotification?.(`Saved ${updated.name}`);
+      const ui = normalizeAgent(updated);
+      setDetail(ui);
+      await reloadPlatformData();
+      return ui;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed.");
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!agentId || !canDelete) return false;
+    if (!window.confirm("Delete this agent?")) return false;
+    setLoading(true);
+    setError("");
+    try {
+      await agentsApi.deleteAgent(agentId);
+      showNotification?.("Agent deleted.");
+      await reloadPlatformData();
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed.");
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const publish = async (doPublish: boolean) => {
+    if (!agentId || !canPublish) return;
+    setLoading(true);
+    setError("");
+    try {
+      const dto = doPublish
+        ? await agentsApi.publishAgent(agentId)
+        : await agentsApi.unpublishAgent(agentId);
+      setDetail(normalizeAgent(dto));
+      await reloadPlatformData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Publish failed.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const formTabs: { key: AgentFormTabKey; label: string }[] = [
+    {
+      key: "access",
+      label: singleGroup ? "Access" : `Access (${form.groupIds.length})`,
+    },
+    { key: "basics", label: "Basics" },
+    {
+      key: "knowledge",
+      label: `Knowledge & tools (${form.knowledgeBases.length + form.tools.length})`,
+    },
+    {
+      key: "memory",
+      label: form.memoryEnabled ? "Memory (on)" : "Memory",
+    },
+  ];
+
+  return {
+    loading,
+    error,
+    setError,
+    options,
+    detail,
+    form,
+    setForm,
+    formTab,
+    setFormTab,
+    formTabs,
+    readOnly,
+    canCreate,
+    canEdit,
+    canDelete,
+    canPublish,
+    mode,
+    groupOptions,
+    singleGroup,
+    visibleModels,
+    pickerKnowledgeBases,
+    remoteServers,
+    remoteTools,
+    localTools,
+    openRemoteServerIds,
+    setOpenRemoteServerIds,
+    toggleGroup,
+    toggleKb,
+    setKbMode,
+    toggleTool,
+    save,
+    remove,
+    publish,
+    loadAgent,
+    resetCreate,
+    fieldClass: agentFieldClass,
+    labelClass: agentLabelClass,
+  };
+}
+
+export type AgentEditorController = ReturnType<typeof useAgentEditor>;
+
+
+========================================================================
+FILE: frontend/src/components/audit/ExecutionActivity.tsx
+ACTION: REPLACE ENTIRE FILE
+========================================================================
+import React, { useEffect, useState } from "react";
+import { Activity } from "lucide-react";
+import { usePlatform } from "../../context/PlatformContext";
+import {
+  auditApi,
+  AuditRunDetail,
+  AuditRunItem,
+} from "../../api/execution";
+
+const RECENT_LIMIT = 20;
+
+type ActivityRow = AuditRunItem & { agentName: string };
+
+export const ExecutionActivity: React.FC = () => {
+  const { agents, theme } = usePlatform();
+  const [rows, setRows] = useState<ActivityRow[]>([]);
+  const [error, setError] = useState("");
+  const [selected, setSelected] = useState<AuditRunDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  useEffect(() => {
+    let stop = false;
+    const load = async () => {
+      try {
+        const lists = await Promise.all(
+          agents.map(async (agent) => {
+            const page = await auditApi
+              .list(agent.id, {}, RECENT_LIMIT, 0)
+              .catch(() => ({ items: [] as AuditRunItem[] }));
+            return page.items.map((item) => ({
+              ...item,
+              agentName: agent.name,
+            }));
+          }),
+        );
+        const next = lists.flat().sort(
+          (a, b) =>
+            new Date(b.createdAt || 0).getTime() -
+            new Date(a.createdAt || 0).getTime(),
+        );
+        if (!stop) {
+          setRows(next.slice(0, 50));
+          setError("");
+        }
+      } catch (err) {
+        if (!stop)
+          setError(
+            err instanceof Error ? err.message : "Could not load executions.",
+          );
+      }
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const loop = async () => {
+      await load();
+      if (!stop) timer = setTimeout(loop, 10000);
+    };
+    void loop();
+    return () => {
+      stop = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [agents]);
+
+  const openRow = async (row: ActivityRow) => {
+    setDetailLoading(true);
+    setSelected(null);
+    try {
+      const detail = await auditApi.get(row.agentId, row.runId);
+      setSelected(detail);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Could not load run details.",
+      );
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const light = theme === "light";
+
+  return (
+    <div
+      className={`panel space-y-3 ${light ? "backdrop-blur-sm bg-slate-950/5 border-neutral-900/5 shadow-none" : "backdrop-blur-sm bg-slate-100/5 border-neutral-100/10"}`}
+    >
+      <h3
+        className={`text-sm font-bold flex items-center gap-2 ${light ? "text-sky-950" : "text-sky-50"}`}
+      >
+        <Activity className="w-4 h-4 text-cyan-400" /> Agent executions
+      </h3>
+      {error && <p className="text-xs text-amber-400">{error}</p>}
+      <div className="overflow-x-auto max-h-80">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className={light ? "text-slate-600" : "text-slate-400"}>
+              <th className="text-left p-2">When</th>
+              <th className="text-left p-2">Agent</th>
+              <th className="text-left p-2">Status</th>
+              <th className="text-left p-2">Who</th>
+              <th className="text-left p-2">Message</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr
+                key={row.runId}
+                className="cursor-pointer border-t border-slate-800/40"
+                onClick={() => void openRow(row)}
+              >
+                <td className="p-2 whitespace-nowrap">
+                  {row.createdAt
+                    ? new Date(row.createdAt).toLocaleString()
+                    : ""}
+                </td>
+                <td className="p-2">{row.agentName}</td>
+                <td className="p-2">
+                  {row.status}
+                  {row.executionType ? ` · ${row.executionType}` : ""}
+                </td>
+                <td className="p-2">{row.triggeredBy}</td>
+                <td className="p-2 truncate max-w-[240px]">
+                  {row.inputPreview}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {rows.length === 0 && (
+          <p className="text-xs text-slate-500 p-2">No executions yet.</p>
+        )}
+      </div>
+      {detailLoading && (
+        <p className="text-xs text-slate-500">Loading run details…</p>
+      )}
+      {selected && !detailLoading && (
+        <div className="text-xs space-y-1 border-t border-slate-800 pt-2">
+          <div>Run {selected.runId}</div>
+          <div>Thread {selected.threadId}</div>
+          <div className="whitespace-pre-wrap">
+            Answer: {selected.output || "—"}
+          </div>
+          <div className="text-amber-300">Error: {selected.error || "—"}</div>
+          <div>Steps: {selected.steps.join(" → ") || "—"}</div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+========================================================================
+FILE: frontend/src/components/layout/Sidebar.tsx
+ACTION: REPLACE ENTIRE FILE
+========================================================================
+import React from "react";
+import {
+  LayoutDashboard,
+  Users,
+  ShieldCheck,
+  Wrench,
+  Database,
+  Bot,
+  Terminal,
+  Activity,
+  Network,
+  Cpu,
+  FolderGit2,
+  Lock,
+  Boxes,
+  KeyRound,
+} from "lucide-react";
+import { usePlatform } from "../../context/PlatformContext";
+import { RolePermissionKey } from "../../types";
+import { PERMISSIONS } from "../../config/permissions";
+import DarkLogo from "../../assets/images/ccilLogo-dark.png";
+export const Sidebar: React.FC = () => {
+  const {
+    theme,
+    setTheme,
+    activeView,
+    setActiveView,
+    pendingRegistrations,
+    localTools,
+    agents,
+    knowledgeBases,
+    hasPermission,
+    currentRole,
+    currentUser,
+    canAccessView, // <-- this was missing, causing the ReferenceError / blank screen
+  } = usePlatform();
+
+  const pendingToolsCount = localTools.filter(
+    (t) => String(t.status || "").toLowerCase() === "pendingapproval",
+  ).length;
+
+  interface NavItem {
+    id: string;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    permission?: RolePermissionKey;
+    badge?: number | string;
+    badgeColor?: string;
+  }
+
+  const navSections: { section: string; items: NavItem[] }[] = [
+    {
+      section: "OVERVIEW",
+      items: [
+        { id: "dashboard", label: "Platform Dashboard", icon: LayoutDashboard },
+        { id: "audit", label: "Audit & Telemetry", icon: Activity },
+      ],
+    },
+    {
+      section: "IDENTITY & GOVERNANCE",
+      items: [
+        {
+          id: "users",
+          label: "Users & Approvals",
+          icon: Users,
+          permission: PERMISSIONS.Users.View,
+          badge:
+            pendingRegistrations.length > 0
+              ? pendingRegistrations.length
+              : undefined,
+          badgeColor: "bg-amber-500 text-slate-950",
+        },
+        {
+          id: "roles",
+          label: "Role Profiles (RBAC)",
+          icon: ShieldCheck,
+          permission: PERMISSIONS.RoleProfile.View,
+        },
+        {
+          id: "api-keys",
+          label: "API Key Management",
+          icon: KeyRound,
+        },
+      ],
+    },
+    {
+      section: "INFRASTRUCTURE & TOOLS",
+      items: [
+        {
+          id: "tools",
+          label: "Tools Management",
+          icon: Wrench,
+          permission: PERMISSIONS.LocalTools.View,
+          badge:
+            pendingToolsCount > 0 ? `${pendingToolsCount} review` : undefined,
+          badgeColor:
+            "bg-indigo-500/30 text-indigo-300 border border-indigo-500/40",
+        },
+        {
+          id: "model-registry",
+          label: "Model Registry",
+          icon: Boxes,
+          permission: PERMISSIONS.ModelRegistry.View,
+          badgeColor:
+            "bg-indigo-500/30 text-indigo-300 border border-indigo-500/40",
+        },
+        {
+          id: "knowledge",
+          label: "Knowledge & RAG",
+          icon: Database,
+          permission: PERMISSIONS.KnowledgeBase.View,
+          badge: knowledgeBases.length,
+          badgeColor: "bg-emerald-500/20 text-emerald-300",
+        },
+      ],
+    },
+    {
+      section: "INTELLIGENCE & TESTING",
+      items: [
+        {
+          id: "agents",
+          label: "Agent Studio",
+          icon: Bot,
+          permission: PERMISSIONS.Agent.View,
+          badge: agents.length,
+          badgeColor: "bg-purple-500/20 text-purple-300",
+        },
+        {
+          id: "playground",
+          label: "Playground & Sandbox",
+          icon: Terminal,
+        },
+        {
+          id: "workflows",
+          label: "Agent Workflows",
+          icon: FolderGit2,
+          permission: PERMISSIONS.WorkFlow.View,
+        },
+      ],
+    },
+  ];
+
+  return (
+    <aside
+      id="platform-sidebar"
+      className={`w-64 m-4 mr-0 rounded-2xl border flex flex-col justify-between shrink-0 select-none ${theme === "light" ? "text-slate-800 backdrop-blur-lg bg-slate-950/5 border-neutral-900/5" : "text-slate-100 backdrop-blur-lg bg-slate-100/5 border-neutral-100/10"}`}
+    >
+      <div className="py-4 px-3 space-y-6 overflow-y-auto">
+        {navSections.map((sec) => {
+          const visibleItems = sec.items.filter((item) =>
+            canAccessView(item.id),
+          );
+          if (visibleItems.length === 0) return null; // hide the whole section header too if nothing in it is visible
+
+          return (
+            <div key={sec.section} className="space-y-1">
+              <div
+                className={`px-3 text-[10px] font-bold uppercase tracking-wider mb-2 ${theme === "light" ? "text-slate-600" : "text-slate-300"}`}
+              >
+                {sec.section}
+              </div>
+              <div className="space-y-0.5">
+                {visibleItems.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = activeView === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      id={`nav-btn-${item.id}`}
+                      onClick={() => setActiveView(item.id)}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-all ${
+                        isActive
+                          ? "bg-active text-white font-semibold shadow-md shadow-sky-600/25"
+                          : "text-white hover:text-white hover:bg-sky-600/10"
+                      }`}
+                    >
+                      <div className="flex items-center space-x-2.5 min-w-0">
+                        <Icon className={`w-4 h-4 shrink-0`} />
+                        <span className="truncate">{item.label}</span>
+                      </div>
+                      {item.badge !== undefined && (
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${item.badgeColor || "bg-slate-700 text-slate-300"}`}
+                        >
+                          {item.badge}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Role Profile summary in sidebar footer */}
+      <div className="p-3">
+        <div
+          className={`px-2 py-2 rounded-lg bg-slate-850/60 border flex items-center justify-between ${theme === "light" ? "border-slate-400/40" : "border-slate-300/20"}`}
+        >
+          <div className="min-w-0">
+            <div
+              className={`text-[10px] font-medium ${theme === "light" ? "text-slate-600" : "text-slate-300"}`}
+            >
+              Active Policy Profile
+            </div>
+            <div
+              className={`text-xs font-bold truncate ${theme === "light" ? "text-slate-800" : "text-slate-200"}`}
+            >
+              {currentRole?.name || "Standard User"}
+            </div>
+          </div>
+          <span
+            className="w-2.5 h-2.5 rounded-full shrink-0"
+            style={{ backgroundColor: currentRole?.color || "#0284c7" }}
+            title={`Role code: ${currentRole?.code}`}
+          />
+        </div>
+        <div className="text-xs flex item-center justify-center mt-2">
+          Powerd by <img src={DarkLogo} className="ml-2" width={40} />
+        </div>
+      </div>
+    </aside>
+  );
+};
+
+
+========================================================================
+FILE: frontend/src/components/workflow/WorkflowAgentEditorPanel.tsx
+ACTION: NEW FILE
+========================================================================
+import React, { useEffect, useState } from "react";
+import { Plus } from "lucide-react";
+import { AgentEditorForm } from "../agents/AgentEditorForm";
+import { useAgentEditor } from "../agents/useAgentEditor";
+import type { AgentUi } from "../../types/agent";
+
+type Props = {
+  agentId: string | null;
+  publishedAgents: { id: string; name: string }[];
+  allAgents: { id: string; name: string }[];
+  onAgentLinked: (
+    agentId: string,
+    agent?: AgentUi | { id: string; name: string },
+  ) => void;
+  canCreate: boolean;
+};
+
+export const WorkflowAgentEditorPanel: React.FC<Props> = ({
+  agentId,
+  publishedAgents,
+  allAgents,
+  onAgentLinked,
+  canCreate,
+}) => {
+  const [panelMode, setPanelMode] = useState<"edit" | "create">("edit");
+
+  const editor = useAgentEditor({
+    agentId: panelMode === "edit" ? agentId : null,
+    mode: panelMode,
+    autoLoad: panelMode === "edit" && Boolean(agentId),
+  });
+
+  useEffect(() => {
+    if (agentId) setPanelMode("edit");
+  }, [agentId]);
+
+  const startCreate = () => {
+    editor.resetCreate();
+    setPanelMode("create");
+  };
+
+  const handleCreateAndLink = async () => {
+    const saved = await editor.save();
+    if (saved?.id) {
+      onAgentLinked(saved.id, saved);
+      setPanelMode("edit");
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-700/80 bg-slate-950/90 p-3 space-y-3 shadow-inner">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <h3 className="text-xs font-semibold text-white">Agent configuration</h3>
+          <p className="text-[10px] text-slate-400 mt-0.5">
+            Same fields as Agent Studio — access, prompt, knowledge, tools, memory.
+          </p>
+        </div>
+        {editor.detail && (
+          <span className="text-[9px] uppercase tracking-wide px-2 py-0.5 rounded bg-slate-800 text-slate-300 shrink-0">
+            {editor.detail.status}
+          </span>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-[10px] text-slate-400">Linked agent</label>
+        <div className="flex gap-2">
+          <select
+            className="flex-1 bg-slate-800 border border-slate-700 rounded-lg p-2 text-[11px] text-white"
+            value={agentId || ""}
+            onChange={(e) => {
+              const id = e.target.value;
+              if (id) {
+                setPanelMode("edit");
+                const name =
+                  allAgents.find((a) => a.id === id)?.name ?? undefined;
+                onAgentLinked(id, name ? { id, name } : undefined);
+              }
+            }}
+          >
+            <option value="">Select agent…</option>
+            {allAgents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+                {publishedAgents.some((p) => p.id === a.id) ? "" : " (draft)"}
+              </option>
+            ))}
+          </select>
+          {canCreate && (
+            <button
+              type="button"
+              onClick={startCreate}
+              className="shrink-0 px-2 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-[10px] font-semibold flex items-center gap-1"
+              title="Create a new agent"
+            >
+              <Plus className="h-3 w-3" />
+              New
+            </button>
+          )}
+        </div>
+        {agentId &&
+          !publishedAgents.some((p) => p.id === agentId) && (
+            <p className="text-[10px] text-amber-300/90">
+              This agent is not published. Publish it before running the workflow in production.
+            </p>
+          )}
+      </div>
+
+      {(panelMode === "create" || agentId) && (
+        <div className="max-h-[min(52vh,520px)] overflow-y-auto pr-1">
+          {panelMode === "create" ? (
+            <>
+              <AgentEditorForm
+                editor={editor}
+                formId="workflow-agent-create-form"
+                showFooter={false}
+                compact
+              />
+              <div className="flex gap-2 pt-2 border-t border-slate-800 mt-2">
+                <button
+                  type="button"
+                  className="text-[10px] text-slate-400"
+                  onClick={() => setPanelMode("edit")}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={editor.loading}
+                  onClick={() => void handleCreateAndLink()}
+                  className="ml-auto px-3 py-1.5 rounded bg-purple-600 text-white text-[10px] font-semibold"
+                >
+                  Create & link
+                </button>
+              </div>
+            </>
+          ) : editor.loading && !editor.detail ? (
+            <p className="text-[10px] text-slate-500">Loading agent…</p>
+          ) : (
+            <AgentEditorForm
+              editor={editor}
+              formId="workflow-agent-edit-form"
+              compact
+            />
+          )}
+        </div>
+      )}
+
+      {!agentId && panelMode !== "create" && (
+        <p className="text-[11px] text-slate-500">
+          Choose a published agent or create one to edit its configuration here.
+        </p>
+      )}
+    </div>
+  );
+};
+
+
+========================================================================
+FILE: frontend/src/components/workflow/WorkflowStudioView.tsx
+ACTION: NEW FILE
+========================================================================
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ReactFlow,
+  Background,
+  Controls,
+  MiniMap,
+  Handle,
+  Position,
+  ReactFlowProvider,
+  addEdge,
+  useReactFlow,
+  type Connection,
+  type Edge,
+  type Node,
+  useEdgesState,
+  useNodesState,
+  MarkerType,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
+import {
+  GitBranch,
+  Play,
+  Plus,
+  Save,
+  Upload,
+  UserCircle,
+  Bot,
+  Diamond,
+  Circle,
+  Square,
+  Sun,
+  Moon,
+} from "lucide-react";
+import { usePlatform } from "../../context/PlatformContext";
+import { PERMISSIONS } from "../../config/permissions";
+import { WorkflowAgentEditorPanel } from "./WorkflowAgentEditorPanel";
+import { workflowsApi } from "../../api/workflows";
+import type {
+  WorkflowDefinition,
+  WorkflowDocument,
+  WorkflowNode,
+  WorkflowRunResponse,
+} from "../../types/workflow";
+import {
+  linearPipelineTemplate,
+  supervisorSqlTemplate,
+} from "./workflowTemplates";
+
+type FlowData = {
+  wfType: WorkflowNode["type"];
+  label: string;
+  agentId?: string;
+  agentName?: string;
+  input?: string;
+  output?: string;
+  on?: string;
+  role?: WorkflowNode["role"];
+};
+
+const WF_DND = "application/x-workflow-dnd";
+
+type WfDragPayload =
+  | {
+      kind: "palette";
+      wfType: WorkflowNode["type"];
+      role?: WorkflowNode["role"];
+    }
+  | { kind: "agent"; agentId: string; name: string };
+
+function startDrag(e: React.DragEvent, payload: WfDragPayload) {
+  e.dataTransfer.setData(WF_DND, JSON.stringify(payload));
+  e.dataTransfer.effectAllowed = "move";
+}
+
+function displayLabel(data: FlowData): string {
+  if (data.agentName?.trim()) return data.agentName.trim();
+  return data.label;
+}
+
+function buildFlowData(
+  wfType: WorkflowNode["type"],
+  role?: WorkflowNode["role"],
+  agent?: { id: string; name: string },
+): FlowData {
+  const baseLabel = nodeLabel({ id: "x", type: wfType, role });
+  return {
+    wfType,
+    label: agent?.name ?? baseLabel,
+    role,
+    agentId: agent?.id,
+    agentName: agent?.name,
+    input: wfType === "agent" ? "{{input}}" : undefined,
+    output: wfType === "agent" ? "output" : undefined,
+    on: wfType === "condition" ? "supervisor_out" : undefined,
+  };
+}
+
+function definitionToFlow(def: WorkflowDefinition): { nodes: Node[]; edges: Edge[] } {
+  const nodes: Node[] = def.nodes.map((n) => ({
+    id: n.id,
+    type: "wfNode",
+    position: n.position ?? { x: 0, y: 0 },
+    data: {
+      wfType: n.type,
+      label: nodeLabel(n),
+      agentId: n.agentId,
+      input: n.input,
+      output: n.output,
+      on: n.on,
+      role: n.role,
+    } satisfies FlowData,
+  }));
+  const edges: Edge[] = def.edges.map((e, i) => ({
+    id: `e-${e.from}-${e.to}-${i}`,
+    source: e.from,
+    target: e.to,
+    label: e.when || undefined,
+    markerEnd: { type: MarkerType.ArrowClosed },
+    data: { when: e.when, maxLoops: e.maxLoops },
+  }));
+  return { nodes, edges };
+}
+
+function flowToDefinition(
+  nodes: Node[],
+  edges: Edge[],
+  maxSteps: number,
+): WorkflowDefinition {
+  return {
+    maxSteps,
+    nodes: nodes.map((n) => {
+      const d = n.data as FlowData;
+      return {
+        id: n.id,
+        type: d.wfType,
+        agentId: d.agentId,
+        input: d.input,
+        output: d.output,
+        on: d.on,
+        role: d.role,
+        position: { x: n.position.x, y: n.position.y },
+      };
+    }),
+    edges: edges.map((e) => ({
+      from: e.source,
+      to: e.target,
+      when: String((e.data as { when?: string })?.when ?? e.label ?? ""),
+      maxLoops: (e.data as { maxLoops?: number })?.maxLoops,
+    })),
+  };
+}
+
+function nodeLabel(n: WorkflowNode): string {
+  if (n.type === "start") return "Start";
+  if (n.type === "end") return "End";
+  if (n.type === "condition") return "Route";
+  if (n.type === "human") return "Human approval";
+  if (n.role === "supervisor") return "Supervisor";
+  if (n.type === "agent") return "Agent";
+  return n.type;
+}
+
+function workflowUi(light: boolean) {
+  return {
+    title: light ? "text-slate-900" : "text-white",
+    subtitle: light ? "text-slate-600" : "text-slate-400",
+    subtitleStrong: light ? "text-slate-700" : "text-slate-300",
+    panel:
+      light
+        ? "rounded-xl border border-slate-200 bg-white shadow-sm"
+        : "rounded-xl border border-slate-800 bg-slate-900/80",
+    panelTitle: light ? "text-sm font-semibold text-slate-900" : "text-sm font-semibold text-white",
+    listBtn:
+      light
+        ? "w-full flex justify-between items-center px-3 py-2 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-xs text-left transition-colors"
+        : "w-full flex justify-between items-center px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-left",
+    listBtnTitle: light ? "text-slate-900 font-medium" : "text-white font-medium",
+    listBtnMeta: light ? "text-slate-500" : "text-slate-400",
+    templateBtn:
+      light
+        ? "w-full text-left px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 text-xs text-slate-800 transition-colors"
+        : "w-full text-left px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-white",
+    dashedBtn:
+      light
+        ? "flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-slate-300 text-xs text-slate-600 hover:bg-slate-50"
+        : "flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-slate-600 text-xs text-slate-300",
+    input:
+      light
+        ? "w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-400"
+        : "w-full bg-slate-800 rounded-lg px-2 py-1.5 text-xs text-white",
+    field:
+      light
+        ? "w-full bg-white border border-slate-200 rounded p-1.5 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-400"
+        : "w-full bg-slate-800 rounded p-1.5 text-xs text-white",
+    sidebarBtn:
+      light
+        ? "w-full text-xs px-2 py-1.5 rounded bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-800 transition-colors"
+        : "w-full text-xs px-2 py-1.5 rounded bg-slate-800 text-white",
+    sidebarBtnDisabled:
+      light
+        ? "w-full text-xs px-2 py-1.5 rounded bg-slate-50 text-slate-400 border border-slate-200"
+        : "w-full text-xs px-2 py-1.5 rounded bg-slate-900 text-slate-500 border border-slate-700",
+    label: light ? "text-[10px] text-slate-500 uppercase font-semibold" : "text-[10px] text-slate-500 uppercase font-semibold",
+    fieldLabel: light ? "text-[10px] text-slate-500" : "text-[10px] text-slate-400",
+    hint: light ? "text-[10px] text-slate-500" : "text-[10px] text-slate-500",
+    hintCode: light ? "text-slate-700" : "text-slate-500",
+    supervisorHint: light ? "text-[10px] text-sky-800" : "text-[10px] text-cyan-200/80",
+    supervisorCode: light ? "text-sky-700" : "text-cyan-300",
+    canvas:
+      light
+        ? "flex-1 min-h-[480px] rounded-xl border border-slate-200 overflow-hidden bg-slate-50 shadow-inner [&_.react-flow__controls-button]:bg-white [&_.react-flow__controls-button]:border-slate-200 [&_.react-flow__controls-button]:fill-slate-600 [&_.react-flow__controls-button:hover]:bg-slate-100"
+        : "flex-1 min-h-[480px] rounded-xl border border-slate-800 overflow-hidden bg-slate-950",
+    error:
+      light
+        ? "text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-3"
+        : "text-xs text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3",
+    themeToggle:
+      light
+        ? "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 shadow-sm transition-colors"
+        : "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-600 bg-slate-800 text-slate-200 hover:bg-slate-700 transition-colors",
+    runMeta: light ? "text-[10px] text-slate-600 max-h-48 overflow-y-auto space-y-1" : "text-[10px] text-slate-300 max-h-48 overflow-y-auto space-y-1",
+    runOk: light ? "text-emerald-700" : "text-emerald-300",
+    runStepBorder: light ? "border-t border-slate-200 pt-1" : "border-t border-slate-700 pt-1",
+    bgDot: light ? "#cbd5e1" : undefined,
+  };
+}
+
+const WfNode: React.FC<{ data: FlowData }> = ({ data }) => {
+  const { theme } = usePlatform();
+  const light = theme === "light";
+  const showTarget = data.wfType !== "start";
+  const showSource = data.wfType !== "end";
+  const icon =
+    data.wfType === "start" ? (
+      <Circle className="h-3 w-3 text-emerald-400" />
+    ) : data.wfType === "end" ? (
+      <Square className="h-3 w-3 text-rose-400" />
+    ) : data.wfType === "condition" ? (
+      <Diamond className="h-3 w-3 text-amber-400" />
+    ) : data.wfType === "human" ? (
+      <UserCircle className="h-3 w-3 text-violet-400" />
+    ) : data.role === "supervisor" ? (
+      <GitBranch className="h-3 w-3 text-cyan-300" />
+    ) : (
+      <Bot className="h-3 w-3 text-sky-400" />
+    );
+  return (
+    <div
+      className={
+        light
+          ? "rounded-lg border border-slate-300 bg-white px-3 py-2 min-w-[120px] shadow-md"
+          : "rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 min-w-[120px] shadow-lg"
+      }
+    >
+      {showTarget && (
+        <Handle
+          type="target"
+          position={Position.Top}
+          className="!h-2.5 !w-2.5 !border-2 !border-slate-500 !bg-white"
+        />
+      )}
+      {showSource && (
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          className="!h-2.5 !w-2.5 !border-2 !border-slate-500 !bg-white"
+        />
+      )}
+      <div
+        className={`flex items-center gap-2 text-xs font-semibold ${light ? "text-slate-800" : "text-white"}`}
+      >
+        {icon}
+        <span className="truncate max-w-[140px]">{displayLabel(data)}</span>
+      </div>
+      {data.role && data.wfType === "agent" && (
+        <div
+          className={`mt-0.5 text-[9px] uppercase tracking-wide ${light ? "text-slate-500" : "text-slate-500"}`}
+        >
+          {data.role}
+        </div>
+      )}
+      {data.agentId && !data.agentName && (
+        <div
+          className={`mt-1 truncate text-[10px] ${light ? "text-slate-500" : "text-slate-400"}`}
+        >
+          {data.agentId}
+        </div>
+      )}
+      {data.wfType === "human" && (
+        <div className={`mt-1 text-[9px] ${light ? "text-violet-600" : "text-violet-300"}`}>
+          Preview only
+        </div>
+      )}
+    </div>
+  );
+};
+
+const nodeTypes = { wfNode: WfNode };
+
+type WorkflowFlowCanvasProps = {
+  nodes: Node[];
+  edges: Edge[];
+  onNodesChange: ReturnType<typeof useNodesState>[2];
+  onEdgesChange: ReturnType<typeof useEdgesState>[2];
+  onConnect: (c: Connection) => void;
+  onNodeClick: (id: string) => void;
+  onEdgeClick: (id: string) => void;
+  onPlaceNode: (payload: WfDragPayload, position: { x: number; y: number }) => void;
+  bgDot?: string;
+  light: boolean;
+};
+
+const WorkflowFlowCanvas: React.FC<WorkflowFlowCanvasProps> = ({
+  nodes,
+  edges,
+  onNodesChange,
+  onEdgesChange,
+  onConnect,
+  onNodeClick,
+  onEdgeClick,
+  onPlaceNode,
+  bgDot,
+  light,
+}) => {
+  const { screenToFlowPosition } = useReactFlow();
+
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }, []);
+
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      const raw = e.dataTransfer.getData(WF_DND);
+      if (!raw) return;
+      try {
+        const payload = JSON.parse(raw) as WfDragPayload;
+        const position = screenToFlowPosition({
+          x: e.clientX,
+          y: e.clientY,
+        });
+        onPlaceNode(payload, position);
+      } catch {
+        /* ignore bad payload */
+      }
+    },
+    [onPlaceNode, screenToFlowPosition],
+  );
+
+  return (
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      onNodesChange={onNodesChange}
+      onEdgesChange={onEdgesChange}
+      onConnect={onConnect}
+      onDrop={onDrop}
+      onDragOver={onDragOver}
+      onNodeClick={(_, n) => onNodeClick(n.id)}
+      onEdgeClick={(_, edge) => onEdgeClick(edge.id)}
+      nodeTypes={nodeTypes}
+      nodesDraggable
+      nodesConnectable
+      elementsSelectable
+      fitView
+      deleteKeyCode={["Backspace", "Delete"]}
+      className="h-full w-full"
+    >
+      <Background color={bgDot} gap={20} size={1} />
+      <Controls />
+      <MiniMap
+        className={light ? "!bg-white !border-slate-200" : undefined}
+        maskColor={light ? "rgb(148 163 184 / 0.15)" : undefined}
+      />
+    </ReactFlow>
+  );
+};
+
+function validateDefinition(def: WorkflowDefinition): string[] {
+  const errors: string[] = [];
+  const starts = def.nodes.filter((n) => n.type === "start");
+  const ends = def.nodes.filter((n) => n.type === "end");
+  if (starts.length !== 1) errors.push("Exactly one Start node is required.");
+  if (ends.length < 1) errors.push("At least one End node is required.");
+  if (def.nodes.some((n) => n.type === "human")) {
+    errors.push("Human-in-the-loop nodes are not saved yet (coming soon).");
+  }
+  for (const n of def.nodes) {
+    if (n.type === "agent" && !n.agentId) {
+      errors.push(`Agent node "${n.id}" needs a published agent selected.`);
+    }
+    if (n.type === "condition" && !n.on?.trim()) {
+      errors.push(`Route node "${n.id}" needs a state key (on).`);
+    }
+  }
+  return errors;
+}
+
+export const WorkflowStudioView: React.FC = () => {
+  const { agents, theme, setTheme, hasPermission } = usePlatform();
+  const canCreateAgent = hasPermission(PERMISSIONS.Agent.Create);
+  const light = theme === "light";
+  const ui = workflowUi(light);
+  const publishedAgents = useMemo(
+    () =>
+      agents.filter((a) => String(a.status).toLowerCase() === "published"),
+    [agents],
+  );
+
+  const [workflows, setWorkflows] = useState<WorkflowDocument[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [doc, setDoc] = useState<WorkflowDocument | null>(null);
+  const [name, setName] = useState("New workflow");
+  const [maxSteps, setMaxSteps] = useState(30);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [testInput, setTestInput] = useState("Show top 10 rows from sales");
+  const [runResult, setRunResult] = useState<WorkflowRunResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const selectedNode = nodes.find((n) => n.id === selectedId);
+  const selectedData = selectedNode?.data as FlowData | undefined;
+  const selectedEdge = edges.find((e) => e.id === selectedEdgeId);
+
+  const refreshList = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const list = await workflowsApi.list();
+      setWorkflows(
+        list.map((s) => ({
+          ...s,
+          definition: { nodes: [], edges: [] },
+          createdAt: "",
+        })),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load workflows.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshList();
+  }, [refreshList]);
+
+  const openNew = (template: WorkflowDefinition, title: string) => {
+    const flow = definitionToFlow(template);
+    setDoc(null);
+    setName(title);
+    setMaxSteps(template.maxSteps ?? 30);
+    setNodes(flow.nodes);
+    setEdges(flow.edges);
+    setRunResult(null);
+    setSelectedId(null);
+  };
+
+  const openWorkflow = async (id: string) => {
+    setBusy(true);
+    setError("");
+    try {
+      const full = await workflowsApi.get(id);
+      setDoc(full);
+      setName(full.name);
+      setMaxSteps(full.definition.maxSteps ?? 30);
+      const flow = definitionToFlow(full.definition);
+      setNodes(flow.nodes);
+      setEdges(flow.edges);
+      setRunResult(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to open workflow.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onConnect = useCallback(
+    (c: Connection) => setEdges((eds) => addEdge({ ...c, markerEnd: { type: MarkerType.ArrowClosed } }, eds)),
+    [setEdges],
+  );
+
+  const placeNode = useCallback(
+    (payload: WfDragPayload, position: { x: number; y: number }) => {
+      const id = `node_${Math.random().toString(36).slice(2, 10)}`;
+      let data: FlowData;
+      if (payload.kind === "agent") {
+        data = buildFlowData("agent", "specialist", {
+          id: payload.agentId,
+          name: payload.name,
+        });
+      } else {
+        data = buildFlowData(payload.wfType, payload.role);
+      }
+      setNodes((nds) => [
+        ...nds,
+        { id, type: "wfNode", position, data },
+      ]);
+      setSelectedId(id);
+      setSelectedEdgeId(null);
+    },
+    [setNodes],
+  );
+
+  const addNode = (wfType: WorkflowNode["type"], role?: WorkflowNode["role"]) => {
+    placeNode({ kind: "palette", wfType, role }, {
+      x: 120 + nodes.length * 40,
+      y: 120 + nodes.length * 20,
+    });
+  };
+
+  const updateSelected = (patch: Partial<FlowData>) => {
+    if (!selectedId) return;
+    setNodes((nds) =>
+      nds.map((n) =>
+        n.id === selectedId
+          ? {
+              ...n,
+              data: {
+                ...(n.data as FlowData),
+                ...patch,
+                label: patch.role
+                  ? nodeLabel({
+                      id: n.id,
+                      type: (n.data as FlowData).wfType,
+                      role: patch.role,
+                    })
+                  : (n.data as FlowData).label,
+              },
+            }
+          : n,
+      ),
+    );
+  };
+
+  const save = async () => {
+    const def = flowToDefinition(nodes, edges, maxSteps);
+    const validation = validateDefinition(def);
+    if (validation.length) {
+      setError(validation.join(" "));
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const payload = { name: name.trim() || "Untitled workflow", definition: def };
+      const saved = doc
+        ? await workflowsApi.update(doc.workflowId, payload)
+        : await workflowsApi.create(payload);
+      setDoc(saved);
+      await refreshList();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const publish = async () => {
+    if (!doc) {
+      setError("Save the workflow before publishing.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const published = await workflowsApi.publish(doc.workflowId);
+      setDoc(published);
+      await refreshList();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Publish failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runTest = async () => {
+    if (!doc) {
+      setError("Save the workflow first.");
+      return;
+    }
+    if (doc.status !== "Published") {
+      setError("Publish the workflow before running a test.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setRunResult(null);
+    try {
+      const result = await workflowsApi.run(doc.workflowId, { input: testInput });
+      setRunResult(result);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Test run failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const inBuilder = nodes.length > 0;
+
+  const toggleTheme = () => {
+    setTheme(light ? "dark" : "light");
+  };
+
+  return (
+    <div
+      className={`p-6 space-y-4 max-w-[1600px] mx-auto ${light ? "text-slate-800" : ""}`}
+    >
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div>
+          <h1 className={`text-2xl font-bold tracking-tight ${ui.title}`}>
+            Agent workflows
+          </h1>
+          <p className={`text-xs mt-1 max-w-3xl ${ui.subtitle}`}>
+            Design multi-agent flows using{" "}
+            <strong className={ui.subtitleStrong}>published</strong> agents from
+            Agent Studio. The supervisor is a normal agent (routing prompt only);
+            specialists hold KB/tools. Wire them on the canvas — not as tools on
+            the supervisor record.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={toggleTheme}
+          className={ui.themeToggle}
+          title={light ? "Switch to dark mode" : "Switch to light mode"}
+          aria-pressed={light}
+        >
+          {light ? (
+            <>
+              <Moon className="h-3.5 w-3.5" aria-hidden />
+              Dark
+            </>
+          ) : (
+            <>
+              <Sun className="h-3.5 w-3.5" aria-hidden />
+              Light
+            </>
+          )}
+        </button>
+      </div>
+
+      {error && <div className={ui.error}>{error}</div>}
+
+      {!inBuilder ? (
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className={`${ui.panel} p-4 space-y-3`}>
+            <h2 className={ui.panelTitle}>New workflow</h2>
+            <button
+              type="button"
+              className={ui.templateBtn}
+              onClick={() => openNew(supervisorSqlTemplate(), "SQL supervisor workflow")}
+            >
+              Supervisor pattern (SQL: route → generator → executor)
+            </button>
+            <button
+              type="button"
+              className={ui.templateBtn}
+              onClick={() => openNew(linearPipelineTemplate(), "Linear pipeline")}
+            >
+              Linear pipeline (A → B)
+            </button>
+            <button
+              type="button"
+              className={ui.dashedBtn}
+              onClick={() =>
+                openNew(
+                  { nodes: [{ id: "start", type: "start", position: { x: 0, y: 0 } }, { id: "end", type: "end", position: { x: 300, y: 0 } }], edges: [{ from: "start", to: "end" }] },
+                  "Empty workflow",
+                )
+              }
+            >
+              <Plus className="h-3 w-3" /> Blank canvas
+            </button>
+          </div>
+          <div className={`${ui.panel} p-4`}>
+            <h2 className={`${ui.panelTitle} mb-3`}>Saved workflows</h2>
+            {loading ? (
+              <p className={`text-xs ${ui.subtitle}`}>Loading…</p>
+            ) : workflows.length === 0 ? (
+              <p className={`text-xs ${ui.subtitle}`}>No workflows yet.</p>
+            ) : (
+              <ul className="space-y-2 max-h-64 overflow-y-auto">
+                {workflows.map((w) => (
+                  <li key={w.workflowId}>
+                    <button
+                      type="button"
+                      className={ui.listBtn}
+                      onClick={() => void openWorkflow(w.workflowId)}
+                    >
+                      <span className={ui.listBtnTitle}>{w.name}</span>
+                      <span className={ui.listBtnMeta}>{w.status}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col lg:flex-row gap-4 min-h-[640px]">
+          <div className="w-full lg:w-48 shrink-0 space-y-2">
+            <input
+              className={ui.input}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Workflow name"
+            />
+            <p className={ui.label}>Drag onto canvas</p>
+            <p className={`text-[9px] ${ui.subtitle} -mt-1 mb-1`}>
+              Drag items below, or click to place. Drag nodes on the canvas to
+              reposition. Connect with the dots on each node.
+            </p>
+            <div
+              draggable
+              onDragStart={(e) =>
+                startDrag(e, {
+                  kind: "palette",
+                  wfType: "agent",
+                  role: "supervisor",
+                })
+              }
+              onClick={() => addNode("agent", "supervisor")}
+              className={`${ui.sidebarBtn} cursor-grab active:cursor-grabbing`}
+            >
+              Supervisor agent
+            </div>
+            <div
+              draggable
+              onDragStart={(e) =>
+                startDrag(e, {
+                  kind: "palette",
+                  wfType: "agent",
+                  role: "specialist",
+                })
+              }
+              onClick={() => addNode("agent", "specialist")}
+              className={`${ui.sidebarBtn} cursor-grab active:cursor-grabbing`}
+            >
+              Specialist agent
+            </div>
+            <div
+              draggable
+              onDragStart={(e) =>
+                startDrag(e, { kind: "palette", wfType: "condition" })
+              }
+              onClick={() => addNode("condition")}
+              className={`${ui.sidebarBtn} cursor-grab active:cursor-grabbing`}
+            >
+              Route / condition
+            </div>
+            <div
+              draggable
+              onDragStart={(e) =>
+                startDrag(e, { kind: "palette", wfType: "end" })
+              }
+              onClick={() => addNode("end")}
+              className={`${ui.sidebarBtn} cursor-grab active:cursor-grabbing`}
+            >
+              End
+            </div>
+            {publishedAgents.length > 0 && (
+              <>
+                <p className={`${ui.label} pt-2`}>Published agents</p>
+                <ul className="space-y-1 max-h-44 overflow-y-auto">
+                  {publishedAgents.map((a) => (
+                    <li key={a.id}>
+                      <div
+                        draggable
+                        onDragStart={(e) =>
+                          startDrag(e, {
+                            kind: "agent",
+                            agentId: a.id,
+                            name: a.name,
+                          })
+                        }
+                        onClick={() =>
+                          placeNode(
+                            { kind: "agent", agentId: a.id, name: a.name },
+                            {
+                              x: 160 + nodes.length * 36,
+                              y: 200 + nodes.length * 24,
+                            },
+                          )
+                        }
+                        className={`${ui.sidebarBtn} cursor-grab active:cursor-grabbing flex items-center gap-1.5`}
+                        title="Drop on canvas as specialist step"
+                      >
+                        <Bot className="h-3 w-3 shrink-0 opacity-70" />
+                        <span className="truncate">{a.name}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            <button
+              type="button"
+              disabled
+              title="Human-in-the-loop: runtime will pause for approval in a future release"
+              className={ui.sidebarBtnDisabled}
+              onClick={() => addNode("human")}
+            >
+              Human approval (soon)
+            </button>
+            <div className="pt-2 flex flex-col gap-2">
+              <button type="button" disabled={busy} onClick={() => void save()} className="flex items-center justify-center gap-1 text-xs py-2 rounded bg-cyan-600 text-white font-semibold">
+                <Save className="h-3 w-3" /> Save
+              </button>
+              <button type="button" disabled={busy || !doc} onClick={() => void publish()} className="flex items-center justify-center gap-1 text-xs py-2 rounded bg-emerald-700 text-white">
+                <Upload className="h-3 w-3" /> Publish
+              </button>
+              {doc && (
+                <span className={`text-[10px] text-center ${ui.subtitle}`}>
+                  Status: {doc.status}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className={ui.canvas}>
+            <ReactFlowProvider>
+              <WorkflowFlowCanvas
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                onNodeClick={(id) => {
+                  setSelectedId(id);
+                  setSelectedEdgeId(null);
+                }}
+                onEdgeClick={(id) => {
+                  setSelectedEdgeId(id);
+                  setSelectedId(null);
+                }}
+                onPlaceNode={placeNode}
+                bgDot={ui.bgDot}
+                light={light}
+              />
+            </ReactFlowProvider>
+          </div>
+
+          <div className="w-full lg:w-[min(420px,38vw)] shrink-0 space-y-3 max-h-[calc(100vh-10rem)] overflow-y-auto">
+            <div className={`${ui.panel} p-3 space-y-2`}>
+              <h3 className={`text-xs font-semibold ${ui.title}`}>
+                {selectedData?.wfType === "agent" ? "Workflow step" : "Properties"}
+              </h3>
+              {selectedEdge ? (
+                <>
+                  <p className={ui.fieldLabel}>
+                    Edge {selectedEdge.source} → {selectedEdge.target}
+                  </p>
+                  <label className={ui.fieldLabel}>when (route label)</label>
+                  <input
+                    className={ui.field}
+                    value={String((selectedEdge.data as { when?: string })?.when ?? selectedEdge.label ?? "")}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setEdges((eds) =>
+                        eds.map((edge) =>
+                          edge.id === selectedEdgeId
+                            ? { ...edge, label: v, data: { ...((edge.data as object) || {}), when: v } }
+                            : edge,
+                        ),
+                      );
+                    }}
+                    placeholder="generate / otherwise"
+                  />
+                </>
+              ) : !selectedData ? (
+                <p className={`text-[11px] ${ui.hint}`}>
+                  Select a node or edge on the canvas.
+                </p>
+              ) : selectedData.wfType === "agent" ? (
+                <>
+                  <p className={ui.fieldLabel}>
+                    Node role:{" "}
+                    <span className={ui.subtitleStrong}>
+                      {selectedData.role === "supervisor" ? "Supervisor" : "Specialist"}
+                    </span>
+                  </p>
+                  <label className={ui.fieldLabel}>Input template</label>
+                  <textarea
+                    className={`${ui.field} h-20`}
+                    value={selectedData.input || ""}
+                    onChange={(e) => updateSelected({ input: e.target.value })}
+                  />
+                  <label className={ui.fieldLabel}>Output state key</label>
+                  <input
+                    className={ui.field}
+                    value={selectedData.output || ""}
+                    onChange={(e) => updateSelected({ output: e.target.value })}
+                  />
+                  {selectedData.role === "supervisor" && (
+                    <p className={ui.supervisorHint}>
+                      Prompt this agent to emit{" "}
+                      <code className={ui.supervisorCode}>ROUTE: generate</code> (or match
+                      your edge labels).
+                    </p>
+                  )}
+                </>
+              ) : selectedData.wfType === "condition" ? (
+                <>
+                  <label className={ui.fieldLabel}>Read state key (on)</label>
+                  <input
+                    className={ui.field}
+                    value={selectedData.on || ""}
+                    onChange={(e) => updateSelected({ on: e.target.value })}
+                  />
+                  <p className={ui.hint}>
+                    Edge labels are matched as <code className={ui.hintCode}>when</code> (e.g.
+                    generate, otherwise).
+                  </p>
+                </>
+              ) : (
+                <p className={`text-[11px] ${ui.hint}`}>No properties for this node type.</p>
+              )}
+            </div>
+
+            {selectedData?.wfType === "agent" && (
+              <WorkflowAgentEditorPanel
+                key={selectedId ?? "agent-panel"}
+                agentId={selectedData.agentId || null}
+                publishedAgents={publishedAgents}
+                allAgents={agents.map((a) => ({ id: a.id, name: a.name }))}
+                canCreate={canCreateAgent}
+                onAgentLinked={(id, agent) =>
+                  updateSelected({
+                    agentId: id,
+                    agentName: agent?.name,
+                    label: agent?.name ?? selectedData?.label,
+                  })
+                }
+              />
+            )}
+
+            <div className={`${ui.panel} p-3 space-y-2`}>
+              <h3 className={`text-xs font-semibold flex items-center gap-1 ${ui.title}`}>
+                <Play className="h-3 w-3" /> Test run
+              </h3>
+              <textarea
+                className={`${ui.field} h-16 p-2`}
+                value={testInput}
+                onChange={(e) => setTestInput(e.target.value)}
+              />
+              <label className={ui.fieldLabel}>maxSteps</label>
+              <input
+                type="number"
+                className={ui.field}
+                value={maxSteps}
+                onChange={(e) => setMaxSteps(Number(e.target.value) || 30)}
+              />
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void runTest()}
+                className="w-full py-2 rounded bg-indigo-600 hover:bg-indigo-500 text-xs text-white font-semibold transition-colors disabled:opacity-50"
+              >
+                Run published workflow
+              </button>
+              {runResult && (
+                <div className={ui.runMeta}>
+                  <div className={ui.runOk}>Status: {runResult.status}</div>
+                  <div className="whitespace-pre-wrap">{runResult.output}</div>
+                  {runResult.steps.map((s, i) => (
+                    <div key={i} className={ui.runStepBorder}>
+                      {s.nodeId} ({s.type}) — {s.status}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+========================================================================
+FILE: frontend/src/components/workflow/workflowTemplates.ts
+ACTION: NEW FILE
+========================================================================
+import type { WorkflowDefinition } from "../../types/workflow";
+
+/** Supervisor + condition + two specialist slots (assign agents in builder). */
+export function supervisorSqlTemplate(): WorkflowDefinition {
+  return {
+    maxSteps: 30,
+    nodes: [
+      { id: "start", type: "start", position: { x: 80, y: 220 } },
+      {
+        id: "supervisor",
+        type: "agent",
+        role: "supervisor",
+        input: "{{input}}",
+        output: "supervisor_out",
+        position: { x: 280, y: 200 },
+      },
+      {
+        id: "route",
+        type: "condition",
+        on: "supervisor_out",
+        position: { x: 480, y: 200 },
+      },
+      {
+        id: "generator",
+        type: "agent",
+        role: "specialist",
+        input:
+          "User question:\n{{input}}\n\nGenerate SQL only. Use attached knowledge base schema.",
+        output: "sql",
+        position: { x: 700, y: 120 },
+      },
+      {
+        id: "executor",
+        type: "agent",
+        role: "specialist",
+        input: "Execute this SQL and return results:\n{{sql}}",
+        output: "result",
+        position: { x: 920, y: 120 },
+      },
+      { id: "end_ok", type: "end", position: { x: 1140, y: 120 } },
+      { id: "end_stop", type: "end", position: { x: 700, y: 320 } },
+    ],
+    edges: [
+      { from: "start", to: "supervisor" },
+      { from: "supervisor", to: "route" },
+      { from: "route", to: "generator", when: "generate" },
+      { from: "route", to: "end_stop", when: "otherwise" },
+      { from: "generator", to: "executor" },
+      { from: "executor", to: "end_ok" },
+    ],
+  };
+}
+
+export function linearPipelineTemplate(): WorkflowDefinition {
+  return {
+    maxSteps: 20,
+    nodes: [
+      { id: "start", type: "start", position: { x: 80, y: 200 } },
+      {
+        id: "step_a",
+        type: "agent",
+        role: "specialist",
+        input: "{{input}}",
+        output: "step_a_out",
+        position: { x: 300, y: 200 },
+      },
+      {
+        id: "step_b",
+        type: "agent",
+        role: "specialist",
+        input: "{{step_a_out}}",
+        output: "output",
+        position: { x: 520, y: 200 },
+      },
+      { id: "end", type: "end", position: { x: 740, y: 200 } },
+    ],
+    edges: [
+      { from: "start", to: "step_a" },
+      { from: "step_a", to: "step_b" },
+      { from: "step_b", to: "end" },
+    ],
+  };
+}
+
+
+========================================================================
+FILE: frontend/src/context/PlatformContext.tsx
+ACTION: REPLACE ENTIRE FILE
+========================================================================
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import { PERMISSIONS } from "../config/permissions";
+import { useDispatch, useSelector } from "react-redux";
+import type { RootState } from "../store";
+import { loginSuccess, logout as logoutAction } from "../store/authSlice";
+import { authApi, AuthLoginError } from "../api/auth";
+import { groupsApi } from "../api/groupApi";
+import { authSessionStore } from "../api/sessionStore";
+import { roleProfilesApi, roleAttributesApi } from "../api/roleApi";
+import { usersApi } from "../api/usersApi";
+import { localToolsApi } from "../api/localToolsApi";
+import { remoteToolsApi } from "../api/remoteToolsApi";
+import { agentsApi } from "../api/agents";
+import { decodeJwtPayload, isJwtExpired } from "../api/jwt";
+import {
+  forget as forgetGroupNames,
+  remember as rememberGroupNames,
+  userGroupEntries,
+} from "../api/groupDirectory";
+import type {
+  AuthUserSummary,
+  LoginResponse,
+  RolePermissionKey,
+} from "../types/auth";
+import type {
+  GroupDto,
+  CreateGroupRequest,
+  UpdateGroupRequest,
+  RoleProfileDto,
+  CreateRoleProfileRequest,
+  UpdateRoleProfileRequest,
+  RoleAttributeDto,
+  UserListItemDto,
+  ApproveUserRequest,
+  RejectUserRequest,
+  ChangeUserStatusRequest,
+  UpdateUserAssignmentsRequest,
+} from "../types/admin";
+import type {
+  AiGatewayDto,
+  ModelRegistryDto,
+} from "../types/gatewayModelRegistry";
+import type {
+  LocalToolListItemDto,
+  RemoteToolListItemDto,
+} from "../types/tools";
+import {
+  normalizeAgent,
+  type AgentUi,
+  type CreateAgentRequest,
+  type PatchAgentRequest,
+} from "../types/agent";
+import { useSessionRefresh } from "../hooks/useSessionRefresh";
+
+export interface PlatformContextType {
+  currentUser: AuthUserSummary | null;
+  currentRole: { name: string; code: string; color: string } | null;
+  isAuthenticated: boolean;
+  authLoading: boolean;
+  authError: string | null;
+  sessionRestoring: boolean;
+  login: (
+    username: string,
+    password: string,
+  ) => Promise<{ success: boolean; isPending?: boolean; error?: string }>;
+  logout: () => void;
+  permissions: string[];
+  hasPermission: (permission: RolePermissionKey | string) => boolean;
+  canAccessView: (view: string) => boolean;
+
+  users: UserListItemDto[];
+  pendingRegistrations: UserListItemDto[];
+  usersLoading: boolean;
+  usersError: string | null;
+  refetchUsers: () => Promise<void>;
+  approveUserRegistration: (
+    userId: string,
+    payload: ApproveUserRequest,
+  ) => Promise<void>;
+  rejectUserRegistration: (
+    userId: string,
+    payload: RejectUserRequest,
+  ) => Promise<void>;
+  updateUserAssignments: (
+    userId: string,
+    payload: UpdateUserAssignmentsRequest,
+  ) => Promise<void>;
+  getUserDetail: (userId: string) => Promise<any>;
+  changeUserStatus: (
+    userId: string,
+    payload: ChangeUserStatusRequest,
+  ) => Promise<void>;
+
+  groups: GroupDto[];
+  groupsLoading: boolean;
+  addGroup: (data: CreateGroupRequest) => Promise<void>;
+  updateGroup: (id: string, data: UpdateGroupRequest) => Promise<void>;
+  deleteGroup: (id: string) => Promise<void>;
+
+  roles: RoleProfileDto[];
+  roleAttributes: RoleAttributeDto[];
+  rolesLoading: boolean;
+  addRole: (data: CreateRoleProfileRequest) => Promise<void>;
+  updateRole: (id: string, data: UpdateRoleProfileRequest) => Promise<void>;
+  deleteRole: (id: string) => Promise<void>;
+
+  localTools: LocalToolListItemDto[];
+  mcpServers: RemoteToolListItemDto[];
+  gateways: AiGatewayDto[];
+  models: ModelRegistryDto[];
+  knowledgeBases: any[];
+  agents: AgentUi[];
+  strategies: any[];
+  ingestedDocs: any[];
+  auditLogs: any[];
+
+  reloadPlatformData: (view?: string) => Promise<void>;
+  addAgent: (data: CreateAgentRequest) => Promise<void>;
+  updateAgent: (id: string, data: PatchAgentRequest) => Promise<void>;
+  deleteAgent: (agentId: string) => Promise<void>;
+  publishAgent: (agentId: string) => Promise<void>;
+  unpublishAgent: (agentId: string) => Promise<void>;
+  selectedPlaygroundAgentId: string | null;
+  setSelectedPlaygroundAgentId: (id: string | null) => void;
+
+  activeView: string;
+  setActiveView: (view: string) => void;
+  notification: string | null;
+  showNotification: (message: string) => void;
+  theme: "light" | "dark" | "enterprise";
+  setTheme: (theme: "light" | "dark" | "enterprise") => void;
+}
+
+const PlatformContext = createContext<PlatformContextType | undefined>(
+  undefined,
+);
+
+function asList(value: unknown): string[] {
+  if (Array.isArray(value))
+    return value
+      .map(String)
+      .map((v) => v.trim())
+      .filter(Boolean);
+  if (typeof value === "string")
+    return value
+      .split(/[,;]/)
+      .map((v) => v.trim())
+      .filter(Boolean);
+  return [];
+}
+
+function extractPermissions(source: any): string[] {
+  const candidates = [
+    source?.roles,
+    source?.Roles,
+    source?.permissions,
+    source?.Permissions,
+    source?.permissionCodes,
+    source?.PermissionCodes,
+    source?.permissionsJson,
+  ];
+  for (const value of candidates) {
+    if (Array.isArray(value)) return value.map(String);
+    if (typeof value === "string") {
+      try {
+        const parsed = JSON.parse(value);
+        if (Array.isArray(parsed)) return parsed.map(String);
+      } catch {}
+      return asList(value);
+    }
+  }
+  return [];
+}
+
+function normalizeStatus(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+function groupsFromClaim(value: unknown): GroupDto[] {
+  return userGroupEntries(value).map((g) => ({
+    id: g.id,
+    name: g.name,
+    description: null,
+    isActive: g.isActive,
+    createdAt: "",
+  }));
+}
+
+function firstViewForPermissions(perms: string[]): string {
+  const has = (p: string) => perms.includes(p);
+  if (
+    has(PERMISSIONS.Users.View) &&
+    has(PERMISSIONS.RoleProfile.View) &&
+    has(PERMISSIONS.Group.View)
+  )
+    return "dashboard";
+  if (has(PERMISSIONS.LocalTools.View)) return "tools";
+  if (has(PERMISSIONS.Users.View) || has(PERMISSIONS.Group.View))
+    return "users";
+  if (has(PERMISSIONS.KnowledgeBase.View)) return "knowledge";
+  if (has(PERMISSIONS.Agent.View)) return "agents";
+  if (has(PERMISSIONS.ModelRegistry.View)) return "model-registry";
+  return "tools";
+}
+
+export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
+  const dispatch = useDispatch();
+  const accessToken = useSelector((s: RootState) => s.auth.accessToken);
+  const reduxUser = useSelector((s: RootState) => s.auth.user);
+  const reduxGroups = useSelector((s: RootState) => s.auth.groups);
+  const permissions = useSelector((s: RootState) => s.auth.permissions);
+  useSessionRefresh();
+  const currentUser = useMemo<AuthUserSummary | null>(
+    () =>
+      reduxUser
+        ? {
+            id: reduxUser.id,
+            username: reduxUser.username,
+            displayName: reduxUser.displayName,
+            email: reduxUser.email,
+            status: reduxUser.status,
+            roleProfile: reduxUser.roleProfile,
+            groups: reduxGroups,
+          }
+        : null,
+    [reduxUser, reduxGroups],
+  );
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [sessionRestoring, setSessionRestoring] = useState(true);
+
+  const [users, setUsers] = useState<UserListItemDto[]>([]);
+  const [pendingRegistrations, setPendingRegistrations] = useState<
+    UserListItemDto[]
+  >([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [usersError, setUsersError] = useState<string | null>(null);
+
+  const [groups, setGroups] = useState<GroupDto[]>([]);
+  const [groupsLoading, setGroupsLoading] = useState(false);
+  const [roles, setRoles] = useState<RoleProfileDto[]>([]);
+  const [roleAttributes, setRoleAttributes] = useState<RoleAttributeDto[]>([]);
+  const [rolesLoading, setRolesLoading] = useState(false);
+
+  const [localTools, setLocalTools] = useState<LocalToolListItemDto[]>([]);
+  const [mcpServers, setMcpServers] = useState<RemoteToolListItemDto[]>([]);
+  const [gateways, setGateways] = useState<AiGatewayDto[]>([]);
+  const [models, setModels] = useState<ModelRegistryDto[]>([]);
+  const [knowledgeBases, setKnowledgeBases] = useState<any[]>([]);
+  const [strategies, setStrategies] = useState<any[]>([]);
+  const [ingestedDocs, setIngestedDocs] = useState<any[]>([]);
+  const [agents, setAgents] = useState<AgentUi[]>([]);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+
+  const [selectedPlaygroundAgentId, setSelectedPlaygroundAgentId] = useState<
+    string | null
+  >(null);
+  const [activeViewState, setActiveViewState] = useState("tools");
+  const [notification, setNotification] = useState<string | null>(null);
+  const [theme, setThemeState] = useState<"light" | "dark" | "enterprise">(
+    () => (localStorage.getItem("ai_platform_theme") as any) || "dark",
+  );
+
+  const showNotification = useCallback((message: string) => {
+    setNotification(message);
+    window.setTimeout(() => setNotification(null), 4000);
+  }, []);
+
+  const normalizedPermissions = useMemo(
+    () => new Set(permissions.map(String)),
+    [permissions],
+  );
+
+  const hasPermission = useCallback(
+    (permission: RolePermissionKey | string) => {
+      if (!currentUser || normalizeStatus(currentUser.status) !== "active")
+        return false;
+      return normalizedPermissions.has(String(permission));
+    },
+    [currentUser, normalizedPermissions],
+  );
+
+  const requiredPermissionForView = useCallback(
+    (view: string): string | null => {
+      switch (view) {
+        case "tools":
+          return PERMISSIONS.LocalTools.View;
+        case "users":
+          return PERMISSIONS.Users.View;
+        case "groups":
+          return PERMISSIONS.Group.View;
+        case "roles":
+          return PERMISSIONS.RoleProfile.View;
+        case "knowledge":
+          return PERMISSIONS.KnowledgeBase.View;
+        case "agents":
+        case "playground":
+          return PERMISSIONS.Agent.View;
+        case "workflows":
+          return PERMISSIONS.WorkFlow.View;
+        case "model-registry":
+          return PERMISSIONS.ModelRegistry.View;
+        case "audit":
+          return PERMISSIONS.Users.View;
+        case "dashboard":
+          return null;
+        default:
+          return null;
+      }
+    },
+    [],
+  );
+
+  const canAccessView = useCallback(
+    (view: string) => {
+      if (!currentUser || normalizeStatus(currentUser.status) !== "active")
+        return false;
+      // API Key Management deliberately has no role-profile permission code yet.
+      // Any active platform user may open the screen; its resource pickers are
+      // still limited by the existing per-resource View permissions and groups.
+      if (view === "api-keys") return true;
+      if (view === "dashboard") {
+        return (
+          hasPermission(PERMISSIONS.Users.View) &&
+          hasPermission(PERMISSIONS.RoleProfile.View) &&
+          hasPermission(PERMISSIONS.Group.View)
+        );
+      }
+      const p = requiredPermissionForView(view);
+      return p ? hasPermission(p) : false;
+    },
+    [currentUser, hasPermission, requiredPermissionForView],
+  );
+
+  const setActiveView = useCallback(
+    (view: string) => {
+      if (canAccessView(view)) setActiveViewState(view);
+    },
+    [canAccessView],
+  );
+
+  const currentRole = useMemo(
+    () =>
+      currentUser?.roleProfile
+        ? {
+            name: currentUser.roleProfile,
+            code: currentUser.roleProfile,
+            color: "#6366f1",
+          }
+        : null,
+    [currentUser],
+  );
+
+  const refetchUsers = useCallback(async () => {
+    setUsersLoading(true);
+    setUsersError(null);
+    try {
+      const allRes = await usersApi.list({ pageSize: 200 });
+      setUsers(allRes.items ?? []);
+
+      // The approval queue is only useful (and only authorized) when the
+      // caller can approve registrations. Do not make a predictable 403
+      // request for every read-only user.
+      if (hasPermission(PERMISSIONS.Users.Approve)) {
+        const pendingRes = await usersApi.pending(1, 200);
+        setPendingRegistrations(pendingRes.items ?? []);
+      } else {
+        setPendingRegistrations([]);
+      }
+    } catch (e) {
+      setUsersError(e instanceof Error ? e.message : "Failed to load users.");
+    } finally {
+      setUsersLoading(false);
+    }
+  }, [hasPermission]);
+
+  const refetchGroups = useCallback(async () => {
+    setGroupsLoading(true);
+    try {
+      // Used only by the dedicated admin Groups screen. All other modules
+      // consume the login/session group distributor and never call this.
+      const directoryRows = await groupsApi.list(true);
+      setGroups(directoryRows);
+      authSessionStore.mergeGroups(directoryRows);
+    } finally {
+      setGroupsLoading(false);
+    }
+  }, []);
+
+  const refetchRoles = useCallback(async () => {
+    setRolesLoading(true);
+    try {
+      const r = await roleProfilesApi.list(true);
+      setRoles(r);
+
+      // Attribute definitions are needed for the permission editor, not for
+      // simply viewing role profiles. Avoid an unnecessary 403 for a caller
+      // that only has RoleProfile.View.
+      if (
+        hasPermission(PERMISSIONS.RoleAttribute.View) ||
+        hasPermission(PERMISSIONS.RoleProfile.Manage)
+      ) {
+        setRoleAttributes(await roleAttributesApi.list());
+      } else {
+        setRoleAttributes([]);
+      }
+    } finally {
+      setRolesLoading(false);
+    }
+  }, [hasPermission]);
+
+  const reloadPlatformData = useCallback(
+    async (view = activeViewState) => {
+      // Load only what the currently visible screen needs. The previous
+      // implementation loaded every permitted service immediately after login,
+      // even though React only renders one view at a time.
+      const tasks: Promise<void>[] = [];
+
+      if (view === "dashboard") {
+        if (hasPermission(PERMISSIONS.Users.View)) tasks.push(refetchUsers());
+        if (hasPermission(PERMISSIONS.RoleProfile.View))
+          tasks.push(refetchRoles());
+        return void (await Promise.allSettled(tasks));
+      }
+
+      if (view === "users") {
+        if (hasPermission(PERMISSIONS.Users.View)) tasks.push(refetchUsers());
+        if (hasPermission(PERMISSIONS.RoleProfile.View))
+          tasks.push(refetchRoles());
+      } else if (view === "groups") {
+        if (hasPermission(PERMISSIONS.Group.View)) tasks.push(refetchGroups());
+      } else if (view === "roles") {
+        if (hasPermission(PERMISSIONS.RoleProfile.View))
+          tasks.push(refetchRoles());
+      } else if (view === "model-registry" || view === "knowledge") {
+        // Groups come from the login/session distributor. Do not call the
+        // admin-only Groups endpoint just to populate a picker.
+      } else if (view === "tools") {
+        if (hasPermission(PERMISSIONS.LocalTools.View)) {
+          tasks.push(
+            (async () => {
+              const remoteAllowed =
+                hasPermission(PERMISSIONS.RemoteTools.View) ||
+                hasPermission(PERMISSIONS.RemoteTools.Add) ||
+                hasPermission(PERMISSIONS.RemoteTools.Edit) ||
+                hasPermission(PERMISSIONS.RemoteTools.Delete);
+              const [local, remote] = await Promise.all([
+                localToolsApi.list({ pageSize: 200 }),
+                remoteAllowed
+                  ? remoteToolsApi.list({ pageSize: 200 })
+                  : Promise.resolve({ items: [] }),
+              ]);
+              setLocalTools(local.items ?? []);
+              setMcpServers(remote.items ?? []);
+            })(),
+          );
+        }
+      } else if (
+        view === "agents" ||
+        view === "playground" ||
+        view === "audit"
+      ) {
+        if (hasPermission(PERMISSIONS.Agent.View)) {
+          tasks.push(
+            (async () => {
+              const result = await agentsApi.getAgents(1, 200);
+              setAgents(
+                (result?.items ?? []).map(normalizeAgent).filter((a) => a.id),
+              );
+            })(),
+          );
+        }
+      }
+
+      await Promise.allSettled(tasks);
+    },
+    [activeViewState, hasPermission, refetchUsers, refetchGroups, refetchRoles],
+  );
+
+  useEffect(() => {
+    // Rehydration now happens before this component ever mounts — see
+    // <PersistGate> in main.tsx. Nothing left to restore here.
+    setSessionRestoring(false);
+  }, []);
+
+  // Keeps the local `groups` list (what Tools/Knowledge/Agents/etc read as
+  // "the groups I belong to") in step with Redux. Covers both login AND a
+  // page refresh — a refresh restores Redux via redux-persist, but nothing
+  // else was refilling this local list afterward, which is why every
+  // service screen went blank after reloading the page.
+  useEffect(() => {
+    setGroups(reduxUser ? groupsFromClaim(reduxGroups) : []);
+  }, [reduxUser, reduxGroups]);
+
+  useEffect(() => {
+    if (!currentUser || sessionRestoring) return;
+    void reloadPlatformData(activeViewState);
+  }, [currentUser, sessionRestoring, activeViewState, reloadPlatformData]);
+
+  const login = useCallback(
+    async (username: string, password: string) => {
+      setAuthLoading(true);
+      setAuthError(null);
+      dispatch(logoutAction());
+      setUsers([]);
+      setPendingRegistrations([]);
+      setGroups([]);
+      setRoles([]);
+      setRoleAttributes([]);
+      setLocalTools([]);
+      setMcpServers([]);
+      setGateways([]);
+      setModels([]);
+      setKnowledgeBases([]);
+      setStrategies([]);
+      setAgents([]);
+      setActiveViewState("tools");
+      try {
+        const response: LoginResponse = await authApi.login(username, password);
+        if (normalizeStatus(response.user.status) !== "active") {
+          dispatch(
+            loginSuccess({
+              accessToken: "",
+              user: {
+                id: response.user.id,
+                username: response.user.username,
+                displayName: response.user.displayName,
+                email: response.user.email,
+                status: response.user.status,
+                roleProfile: response.user.roleProfile,
+                groups: response.user.groups,
+              },
+            }),
+          );
+          return {
+            success: false,
+            isPending:
+              normalizeStatus(response.user.status) === "pendingapproval",
+          };
+        }
+
+        const tokenClaims = decodeJwtPayload<any>(response.accessToken);
+        // Auth's OpenAPI contract returns permissions as a nullable string.
+        // Prefer it, but fall back to token/user permissions if it is empty or absent.
+        const responsePermissions = extractPermissions(response.permissions);
+        const tokenPermissions = extractPermissions(tokenClaims);
+        const userPermissions = extractPermissions(response.user);
+        const nextPermissions = responsePermissions.length
+          ? responsePermissions
+          : tokenPermissions.length
+            ? tokenPermissions
+            : userPermissions;
+        const user = response.user;
+        // The auth OpenAPI response normally carries groups as an id->name map,
+        // while some JWTs carry `groups` as a single string claim. Prefer the
+        // API's named memberships, falling back to token memberships if absent.
+        const responseGroups = userGroupEntries(user.groups);
+        const tokenGroups = userGroupEntries(tokenClaims?.groups);
+        const groupSource =
+          responseGroups.length > 0
+            ? user.groups
+            : tokenGroups.length > 0
+              ? tokenClaims.groups
+              : user.groups;
+
+        dispatch(
+          loginSuccess({
+            accessToken: response.accessToken,
+            expiresIn: response.expiresIn,
+            permissions: nextPermissions,
+            user: {
+              id: String(tokenClaims?.UserId ?? user.id),
+              username: user.username,
+              displayName: user.displayName,
+              email: user.email,
+              status: user.status,
+              roleProfile: user.roleProfile,
+              groups: groupSource,
+            },
+          }),
+        );
+        // Keep the caller's actual memberships separate from any admin group
+        // directory data loaded later for display labels.
+        setGroups(groupsFromClaim(groupSource));
+
+        const firstView = firstViewForPermissions(nextPermissions);
+        setActiveViewState(firstView);
+
+        showNotification(
+          `Welcome back, ${user.displayName || user.username || username}.`,
+        );
+        return { success: true };
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "Login failed.";
+        setAuthError(message);
+        return {
+          success: false,
+          isPending:
+            e instanceof AuthLoginError && e.code === "PENDING_APPROVAL",
+          error: message,
+        };
+      } finally {
+        setAuthLoading(false);
+      }
+    },
+    [showNotification],
+  );
+
+  const logout = useCallback(() => {
+    const token = accessToken;
+    dispatch(logoutAction());
+    setUsers([]);
+    setPendingRegistrations([]);
+    setGroups([]);
+    setRoles([]);
+    setRoleAttributes([]);
+    setLocalTools([]);
+    setMcpServers([]);
+    setGateways([]);
+    setModels([]);
+    setKnowledgeBases([]);
+    setStrategies([]);
+    setAgents([]);
+    void authApi.logout(token);
+    showNotification("Logged out.");
+  }, [accessToken, dispatch, showNotification]);
+
+  const addGroup = async (data: CreateGroupRequest) => {
+    await groupsApi.create(data);
+    await refetchGroups();
+  };
+  const updateGroup = async (id: string, data: UpdateGroupRequest) => {
+    await groupsApi.update(id, data);
+    await refetchGroups();
+  };
+  const deleteGroup = async (id: string) => {
+    await groupsApi.remove(id);
+    await refetchGroups();
+  };
+
+  const addRole = async (data: CreateRoleProfileRequest) => {
+    await roleProfilesApi.create(data);
+    await refetchRoles();
+  };
+  const updateRole = async (id: string, data: UpdateRoleProfileRequest) => {
+    await roleProfilesApi.update(id, data);
+    await refetchRoles();
+  };
+  const deleteRole = async (id: string) => {
+    await roleProfilesApi.remove(id);
+    await refetchRoles();
+  };
+
+  const approveUserRegistration = async (
+    id: string,
+    payload: ApproveUserRequest,
+  ) => {
+    await usersApi.approve(id, payload);
+    await refetchUsers();
+  };
+  const rejectUserRegistration = async (
+    id: string,
+    payload: RejectUserRequest,
+  ) => {
+    await usersApi.reject(id, payload);
+    await refetchUsers();
+  };
+  const updateUserAssignments = async (
+    id: string,
+    payload: UpdateUserAssignmentsRequest,
+  ) => {
+    await usersApi.updateAssignments(id, payload);
+    await refetchUsers();
+  };
+  const getUserDetail = async (id: string) => usersApi.get(id);
+  const changeUserStatus = async (
+    id: string,
+    payload: ChangeUserStatusRequest,
+  ) => {
+    await usersApi.changeStatus(id, payload);
+    await refetchUsers();
+  };
+
+  const addAgent = async (data: CreateAgentRequest) => {
+    await agentsApi.createAgent(data);
+    showNotification("Agent created.");
+    const result = await agentsApi.getAgents(1, 200);
+    setAgents((result?.items ?? []).map(normalizeAgent).filter((a) => a.id));
+  };
+  const updateAgent = async (id: string, data: PatchAgentRequest) => {
+    await agentsApi.patchAgent(id, data);
+    showNotification("Agent saved.");
+    const result = await agentsApi.getAgents(1, 200);
+    setAgents((result?.items ?? []).map(normalizeAgent).filter((a) => a.id));
+  };
+  const deleteAgent = async (agentId: string) => {
+    await agentsApi.deleteAgent(agentId);
+    showNotification("Agent deleted.");
+    setAgents((prev) => prev.filter((a) => a.id !== agentId));
+  };
+
+  const publishAgent = async (agentId: string) => {
+    await agentsApi.publishAgent(agentId);
+    const result = await agentsApi.getAgents(1, 200);
+    setAgents((result?.items ?? []).map(normalizeAgent).filter((a) => a.id));
+  };
+  const unpublishAgent = async (agentId: string) => {
+    await agentsApi.unpublishAgent(agentId);
+    const result = await agentsApi.getAgents(1, 200);
+    setAgents((result?.items ?? []).map(normalizeAgent).filter((a) => a.id));
+  };
+  const setTheme = (theme: "light" | "dark" | "enterprise") => {
+    setThemeState(theme);
+    localStorage.setItem("ai_platform_theme", theme);
+  };
+
+  const value: PlatformContextType = {
+    currentUser,
+    currentRole,
+    isAuthenticated:
+      !!accessToken &&
+      !!currentUser &&
+      normalizeStatus(currentUser.status) === "active",
+    authLoading,
+    authError,
+    sessionRestoring,
+    login,
+    logout,
+    permissions,
+    hasPermission,
+    canAccessView,
+    users,
+    pendingRegistrations,
+    usersLoading,
+    usersError,
+    refetchUsers,
+    approveUserRegistration,
+    rejectUserRegistration,
+    updateUserAssignments,
+    getUserDetail,
+    changeUserStatus,
+    groups,
+    groupsLoading,
+    addGroup,
+    updateGroup,
+    deleteGroup,
+    roles,
+    roleAttributes,
+    rolesLoading,
+    addRole,
+    updateRole,
+    deleteRole,
+    localTools,
+    mcpServers,
+    gateways,
+    models,
+    knowledgeBases,
+    agents,
+    strategies,
+    ingestedDocs,
+    auditLogs,
+    reloadPlatformData,
+    addAgent,
+    updateAgent,
+    deleteAgent,
+    publishAgent,
+    unpublishAgent,
+    selectedPlaygroundAgentId,
+    setSelectedPlaygroundAgentId,
+    activeView: activeViewState,
+    setActiveView,
+    notification,
+    showNotification,
+    theme,
+    setTheme,
+  };
+  return (
+    <PlatformContext.Provider value={value}>
+      {children}
+    </PlatformContext.Provider>
+  );
+};
+export const usePlatform = () => {
+  const context = useContext(PlatformContext);
+  if (!context)
+    throw new Error("usePlatform must be used within a PlatformProvider");
+  return context;
+};
+
+
+========================================================================
+FILE: frontend/src/types/workflow.ts
+ACTION: NEW FILE
+========================================================================
+export type WorkflowNodeType =
+  | "start"
+  | "end"
+  | "agent"
+  | "condition"
+  | "human";
+
+export interface WorkflowNode {
+  id: string;
+  type: WorkflowNodeType;
+  agentId?: string;
+  input?: string;
+  output?: string;
+  on?: string;
+  position?: { x: number; y: number };
+  /** UI-only hint (supervisor vs specialist); not required by API */
+  role?: "supervisor" | "specialist" | "default";
+}
+
+export interface WorkflowEdge {
+  from: string;
+  to: string;
+  when?: string;
+  maxLoops?: number;
+}
+
+export interface WorkflowDefinition {
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  maxSteps?: number;
+}
+
+export interface WorkflowUpsert {
+  name: string;
+  definition: WorkflowDefinition;
+}
+
+export interface WorkflowSummary {
+  workflowId: string;
+  name: string;
+  status: string;
+  updatedAt: string;
+}
+
+export interface WorkflowDocument extends WorkflowSummary {
+  definition: WorkflowDefinition;
+  createdAt: string;
+}
+
+export interface WorkflowRunRequest {
+  input: string;
+  sessionId?: string;
+  userId?: string;
+  orgId?: string;
+}
+
+export interface WorkflowStepTrace {
+  nodeId: string;
+  type: string;
+  agentId?: string;
+  status: string;
+  input?: string;
+  output?: string;
+  outputKey?: string;
+  error?: string;
+}
+
+export interface WorkflowRunResponse {
+  workflowRunId: string;
+  workflowId: string;
+  status: string;
+  output?: string;
+  error?: string;
+  sessionId: string;
+  userId: string;
+  steps: WorkflowStepTrace[];
+  state: Record<string, unknown>;
+}
+
+
+========================================================================
+NOTE: AgentStudioView.tsx
+========================================================================
+If you already have Agent Studio, you only need:
+  import { validateAgentForm } from "./agentEditorConstants";
+  const validate = () => validateAgentForm(form);
+Plus the new agent editor modules (AgentEditorForm, useAgentEditor, agentEditorConstants).
+Workflow builder uses those modules; full file is in section above if you replaced entirely.
