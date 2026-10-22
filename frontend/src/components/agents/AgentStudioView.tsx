@@ -28,6 +28,7 @@ import {
   type KnowledgeBaseMode,
 } from "../../types/agent";
 import { Modal } from "../../rag/Overlays";
+import { validateAgentForm } from "./agentEditorConstants";
 
 const emptyForm = {
   name: "",
@@ -365,55 +366,7 @@ export const AgentStudioView: React.FC = () => {
    * reader straight to the field that needs fixing. Groups are checked first
    * because the resource lists depend on them.
    */
-  const validate = (): {
-    tab: FormTabKey;
-    message: string;
-  } | null => {
-    if (form.groupIds.length === 0) {
-      return {
-        tab: "access",
-        message:
-          "Select at least one group first. The available models, knowledge bases and tools depend on it.",
-      };
-    }
-
-    if (!form.name.trim()) {
-      return {
-        tab: "basics",
-        message: "Give the agent a name.",
-      };
-    }
-
-    if (!form.modelId) {
-      return {
-        tab: "basics",
-        message: "Select a model.",
-      };
-    }
-
-    if (!form.systemPrompt.trim()) {
-      return {
-        tab: "basics",
-        message: "System prompt is required.",
-      };
-    }
-
-    if (form.memoryEnabled && !form.memoryScope) {
-      return {
-        tab: "memory",
-        message: "Choose a memory scope, or turn memory off.",
-      };
-    }
-
-    if (form.memoryEnabled && !form.memoryRetention) {
-      return {
-        tab: "memory",
-        message: "Choose a memory retention period, or turn memory off.",
-      };
-    }
-
-    return null;
-  };
+  const validate = () => validateAgentForm(form);
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();

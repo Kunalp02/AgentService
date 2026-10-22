@@ -28,6 +28,8 @@ import {
   Moon,
 } from "lucide-react";
 import { usePlatform } from "../../context/PlatformContext";
+import { PERMISSIONS } from "../../config/permissions";
+import { WorkflowAgentEditorPanel } from "./WorkflowAgentEditorPanel";
 import { workflowsApi } from "../../api/workflows";
 import type {
   WorkflowDefinition,
@@ -250,7 +252,8 @@ function validateDefinition(def: WorkflowDefinition): string[] {
 }
 
 export const WorkflowStudioView: React.FC = () => {
-  const { agents, theme, setTheme } = usePlatform();
+  const { agents, theme, setTheme, hasPermission } = usePlatform();
+  const canCreateAgent = hasPermission(PERMISSIONS.Agent.Create);
   const light = theme === "light";
   const ui = workflowUi(light);
   const publishedAgents = useMemo(
@@ -617,9 +620,11 @@ export const WorkflowStudioView: React.FC = () => {
             </ReactFlow>
           </div>
 
-          <div className="w-full lg:w-72 shrink-0 space-y-3">
+          <div className="w-full lg:w-[min(420px,38vw)] shrink-0 space-y-3 max-h-[calc(100vh-10rem)] overflow-y-auto">
             <div className={`${ui.panel} p-3 space-y-2`}>
-              <h3 className={`text-xs font-semibold ${ui.title}`}>Properties</h3>
+              <h3 className={`text-xs font-semibold ${ui.title}`}>
+                {selectedData?.wfType === "agent" ? "Workflow step" : "Properties"}
+              </h3>
               {selectedEdge ? (
                 <>
                   <p className={ui.fieldLabel}>
@@ -648,19 +653,12 @@ export const WorkflowStudioView: React.FC = () => {
                 </p>
               ) : selectedData.wfType === "agent" ? (
                 <>
-                  <label className={ui.fieldLabel}>Published agent</label>
-                  <select
-                    className={ui.field}
-                    value={selectedData.agentId || ""}
-                    onChange={(e) => updateSelected({ agentId: e.target.value })}
-                  >
-                    <option value="">Select agent…</option>
-                    {publishedAgents.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </select>
+                  <p className={ui.fieldLabel}>
+                    Node role:{" "}
+                    <span className={ui.subtitleStrong}>
+                      {selectedData.role === "supervisor" ? "Supervisor" : "Specialist"}
+                    </span>
+                  </p>
                   <label className={ui.fieldLabel}>Input template</label>
                   <textarea
                     className={`${ui.field} h-20`}
@@ -698,6 +696,16 @@ export const WorkflowStudioView: React.FC = () => {
                 <p className={`text-[11px] ${ui.hint}`}>No properties for this node type.</p>
               )}
             </div>
+
+            {selectedData?.wfType === "agent" && (
+              <WorkflowAgentEditorPanel
+                agentId={selectedData.agentId || null}
+                publishedAgents={publishedAgents}
+                allAgents={agents.map((a) => ({ id: a.id, name: a.name }))}
+                canCreate={canCreateAgent}
+                onAgentLinked={(id) => updateSelected({ agentId: id })}
+              />
+            )}
 
             <div className={`${ui.panel} p-3 space-y-2`}>
               <h3 className={`text-xs font-semibold flex items-center gap-1 ${ui.title}`}>
