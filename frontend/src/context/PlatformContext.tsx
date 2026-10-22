@@ -307,6 +307,8 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
         case "agents":
         case "playground":
           return PERMISSIONS.Agent.View;
+        case "workflows":
+          return PERMISSIONS.WorkFlow.View;
         case "model-registry":
           return PERMISSIONS.ModelRegistry.View;
         case "audit":

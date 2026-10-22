@@ -13,6 +13,7 @@ import { PlaygroundView } from "./components/playground/PlaygroundView";
 import { AuditLogsView } from "./components/audit/AuditLogsView";
 import { GatewayModelRegistryView } from "./components/gateway/GatewayModelRegistryView";
 import { ApiKeyManagementView } from "./components/api-keys/ApiKeyManagementView";
+import { WorkflowStudioView } from "./components/workflow/WorkflowStudioView";
 
 const MainContent: React.FC = () => {
   const {
@@ -33,6 +34,7 @@ const MainContent: React.FC = () => {
     "agents",
     "model-registry",
     "playground",
+    "workflows",
     "api-keys",
   ];
   const effectiveView = canAccessView(activeView)
@@ -96,6 +98,8 @@ const MainContent: React.FC = () => {
         return <AgentStudioView />;
       case "playground":
         return <PlaygroundView />;
+      case "workflows":
+        return <WorkflowStudioView />;
       case "audit":
         return <AuditLogsView />;
       case "model-registry":
