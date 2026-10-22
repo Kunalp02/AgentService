@@ -130,6 +130,12 @@ export const Sidebar: React.FC = () => {
           label: "Playground & Sandbox",
           icon: Terminal,
         },
+        {
+          id: "workflows",
+          label: "Agent Workflows",
+          icon: FolderGit2,
+          permission: PERMISSIONS.WorkFlow.View,
+        },
       ],
     },
   ];
