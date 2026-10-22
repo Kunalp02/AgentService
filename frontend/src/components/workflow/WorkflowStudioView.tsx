@@ -4,7 +4,11 @@ import {
   Background,
   Controls,
   MiniMap,
+  Handle,
+  Position,
+  ReactFlowProvider,
   addEdge,
+  useReactFlow,
   type Connection,
   type Edge,
   type Node,
@@ -46,11 +50,50 @@ type FlowData = {
   wfType: WorkflowNode["type"];
   label: string;
   agentId?: string;
+  agentName?: string;
   input?: string;
   output?: string;
   on?: string;
   role?: WorkflowNode["role"];
 };
+
+const WF_DND = "application/x-workflow-dnd";
+
+type WfDragPayload =
+  | {
+      kind: "palette";
+      wfType: WorkflowNode["type"];
+      role?: WorkflowNode["role"];
+    }
+  | { kind: "agent"; agentId: string; name: string };
+
+function startDrag(e: React.DragEvent, payload: WfDragPayload) {
+  e.dataTransfer.setData(WF_DND, JSON.stringify(payload));
+  e.dataTransfer.effectAllowed = "move";
+}
+
+function displayLabel(data: FlowData): string {
+  if (data.agentName?.trim()) return data.agentName.trim();
+  return data.label;
+}
+
+function buildFlowData(
+  wfType: WorkflowNode["type"],
+  role?: WorkflowNode["role"],
+  agent?: { id: string; name: string },
+): FlowData {
+  const baseLabel = nodeLabel({ id: "x", type: wfType, role });
+  return {
+    wfType,
+    label: agent?.name ?? baseLabel,
+    role,
+    agentId: agent?.id,
+    agentName: agent?.name,
+    input: wfType === "agent" ? "{{input}}" : undefined,
+    output: wfType === "agent" ? "output" : undefined,
+    on: wfType === "condition" ? "supervisor_out" : undefined,
+  };
+}
 
 function definitionToFlow(def: WorkflowDefinition): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = def.nodes.map((n) => ({
@@ -185,6 +228,8 @@ function workflowUi(light: boolean) {
 const WfNode: React.FC<{ data: FlowData }> = ({ data }) => {
   const { theme } = usePlatform();
   const light = theme === "light";
+  const showTarget = data.wfType !== "start";
+  const showSource = data.wfType !== "end";
   const icon =
     data.wfType === "start" ? (
       <Circle className="h-3 w-3 text-emerald-400" />
@@ -207,13 +252,34 @@ const WfNode: React.FC<{ data: FlowData }> = ({ data }) => {
           : "rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 min-w-[120px] shadow-lg"
       }
     >
+      {showTarget && (
+        <Handle
+          type="target"
+          position={Position.Top}
+          className="!h-2.5 !w-2.5 !border-2 !border-slate-500 !bg-white"
+        />
+      )}
+      {showSource && (
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          className="!h-2.5 !w-2.5 !border-2 !border-slate-500 !bg-white"
+        />
+      )}
       <div
         className={`flex items-center gap-2 text-xs font-semibold ${light ? "text-slate-800" : "text-white"}`}
       >
         {icon}
-        <span>{data.label}</span>
+        <span className="truncate max-w-[140px]">{displayLabel(data)}</span>
       </div>
-      {data.agentId && (
+      {data.role && data.wfType === "agent" && (
+        <div
+          className={`mt-0.5 text-[9px] uppercase tracking-wide ${light ? "text-slate-500" : "text-slate-500"}`}
+        >
+          {data.role}
+        </div>
+      )}
+      {data.agentId && !data.agentName && (
         <div
           className={`mt-1 truncate text-[10px] ${light ? "text-slate-500" : "text-slate-400"}`}
         >
@@ -230,6 +296,86 @@ const WfNode: React.FC<{ data: FlowData }> = ({ data }) => {
 };
 
 const nodeTypes = { wfNode: WfNode };
+
+type WorkflowFlowCanvasProps = {
+  nodes: Node[];
+  edges: Edge[];
+  onNodesChange: ReturnType<typeof useNodesState>[2];
+  onEdgesChange: ReturnType<typeof useEdgesState>[2];
+  onConnect: (c: Connection) => void;
+  onNodeClick: (id: string) => void;
+  onEdgeClick: (id: string) => void;
+  onPlaceNode: (payload: WfDragPayload, position: { x: number; y: number }) => void;
+  bgDot?: string;
+  light: boolean;
+};
+
+const WorkflowFlowCanvas: React.FC<WorkflowFlowCanvasProps> = ({
+  nodes,
+  edges,
+  onNodesChange,
+  onEdgesChange,
+  onConnect,
+  onNodeClick,
+  onEdgeClick,
+  onPlaceNode,
+  bgDot,
+  light,
+}) => {
+  const { screenToFlowPosition } = useReactFlow();
+
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }, []);
+
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      const raw = e.dataTransfer.getData(WF_DND);
+      if (!raw) return;
+      try {
+        const payload = JSON.parse(raw) as WfDragPayload;
+        const position = screenToFlowPosition({
+          x: e.clientX,
+          y: e.clientY,
+        });
+        onPlaceNode(payload, position);
+      } catch {
+        /* ignore bad payload */
+      }
+    },
+    [onPlaceNode, screenToFlowPosition],
+  );
+
+  return (
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      onNodesChange={onNodesChange}
+      onEdgesChange={onEdgesChange}
+      onConnect={onConnect}
+      onDrop={onDrop}
+      onDragOver={onDragOver}
+      onNodeClick={(_, n) => onNodeClick(n.id)}
+      onEdgeClick={(_, edge) => onEdgeClick(edge.id)}
+      nodeTypes={nodeTypes}
+      nodesDraggable
+      nodesConnectable
+      elementsSelectable
+      fitView
+      deleteKeyCode={["Backspace", "Delete"]}
+      className="h-full w-full"
+    >
+      <Background color={bgDot} gap={20} size={1} />
+      <Controls />
+      <MiniMap
+        className={light ? "!bg-white !border-slate-200" : undefined}
+        maskColor={light ? "rgb(148 163 184 / 0.15)" : undefined}
+      />
+    </ReactFlow>
+  );
+};
 
 function validateDefinition(def: WorkflowDefinition): string[] {
   const errors: string[] = [];
@@ -338,25 +484,33 @@ export const WorkflowStudioView: React.FC = () => {
     [setEdges],
   );
 
+  const placeNode = useCallback(
+    (payload: WfDragPayload, position: { x: number; y: number }) => {
+      const id = `node_${Math.random().toString(36).slice(2, 10)}`;
+      let data: FlowData;
+      if (payload.kind === "agent") {
+        data = buildFlowData("agent", "specialist", {
+          id: payload.agentId,
+          name: payload.name,
+        });
+      } else {
+        data = buildFlowData(payload.wfType, payload.role);
+      }
+      setNodes((nds) => [
+        ...nds,
+        { id, type: "wfNode", position, data },
+      ]);
+      setSelectedId(id);
+      setSelectedEdgeId(null);
+    },
+    [setNodes],
+  );
+
   const addNode = (wfType: WorkflowNode["type"], role?: WorkflowNode["role"]) => {
-    const id = `${wfType}_${Math.random().toString(36).slice(2, 8)}`;
-    const data: FlowData = {
-      wfType,
-      label: nodeLabel({ id, type: wfType, role }),
-      role,
-      input: wfType === "agent" ? "{{input}}" : undefined,
-      output: wfType === "agent" ? "output" : undefined,
-      on: wfType === "condition" ? "supervisor_out" : undefined,
-    };
-    setNodes((nds) => [
-      ...nds,
-      {
-        id,
-        type: "wfNode",
-        position: { x: 120 + nds.length * 40, y: 120 + nds.length * 20 },
-        data,
-      },
-    ]);
+    placeNode({ kind: "palette", wfType, role }, {
+      x: 120 + nodes.length * 40,
+      y: 120 + nodes.length * 20,
+    });
   };
 
   const updateSelected = (patch: Partial<FlowData>) => {
@@ -556,19 +710,94 @@ export const WorkflowStudioView: React.FC = () => {
               onChange={(e) => setName(e.target.value)}
               placeholder="Workflow name"
             />
-            <p className={ui.label}>Add node</p>
-            <button type="button" className={ui.sidebarBtn} onClick={() => addNode("agent", "supervisor")}>
+            <p className={ui.label}>Drag onto canvas</p>
+            <p className={`text-[9px] ${ui.subtitle} -mt-1 mb-1`}>
+              Drag items below, or click to place. Drag nodes on the canvas to
+              reposition. Connect with the dots on each node.
+            </p>
+            <div
+              draggable
+              onDragStart={(e) =>
+                startDrag(e, {
+                  kind: "palette",
+                  wfType: "agent",
+                  role: "supervisor",
+                })
+              }
+              onClick={() => addNode("agent", "supervisor")}
+              className={`${ui.sidebarBtn} cursor-grab active:cursor-grabbing`}
+            >
               Supervisor agent
-            </button>
-            <button type="button" className={ui.sidebarBtn} onClick={() => addNode("agent", "specialist")}>
+            </div>
+            <div
+              draggable
+              onDragStart={(e) =>
+                startDrag(e, {
+                  kind: "palette",
+                  wfType: "agent",
+                  role: "specialist",
+                })
+              }
+              onClick={() => addNode("agent", "specialist")}
+              className={`${ui.sidebarBtn} cursor-grab active:cursor-grabbing`}
+            >
               Specialist agent
-            </button>
-            <button type="button" className={ui.sidebarBtn} onClick={() => addNode("condition")}>
+            </div>
+            <div
+              draggable
+              onDragStart={(e) =>
+                startDrag(e, { kind: "palette", wfType: "condition" })
+              }
+              onClick={() => addNode("condition")}
+              className={`${ui.sidebarBtn} cursor-grab active:cursor-grabbing`}
+            >
               Route / condition
-            </button>
-            <button type="button" className={ui.sidebarBtn} onClick={() => addNode("end")}>
+            </div>
+            <div
+              draggable
+              onDragStart={(e) =>
+                startDrag(e, { kind: "palette", wfType: "end" })
+              }
+              onClick={() => addNode("end")}
+              className={`${ui.sidebarBtn} cursor-grab active:cursor-grabbing`}
+            >
               End
-            </button>
+            </div>
+            {publishedAgents.length > 0 && (
+              <>
+                <p className={`${ui.label} pt-2`}>Published agents</p>
+                <ul className="space-y-1 max-h-44 overflow-y-auto">
+                  {publishedAgents.map((a) => (
+                    <li key={a.id}>
+                      <div
+                        draggable
+                        onDragStart={(e) =>
+                          startDrag(e, {
+                            kind: "agent",
+                            agentId: a.id,
+                            name: a.name,
+                          })
+                        }
+                        onClick={() =>
+                          placeNode(
+                            { kind: "agent", agentId: a.id, name: a.name },
+                            {
+                              x: 160 + nodes.length * 36,
+                              y: 200 + nodes.length * 24,
+                            },
+                          )
+                        }
+                        className={`${ui.sidebarBtn} cursor-grab active:cursor-grabbing flex items-center gap-1.5`}
+                        title="Drop on canvas as specialist step"
+                      >
+                        <Bot className="h-3 w-3 shrink-0 opacity-70" />
+                        <span className="truncate">{a.name}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
             <button
               type="button"
               disabled
@@ -594,30 +823,26 @@ export const WorkflowStudioView: React.FC = () => {
           </div>
 
           <div className={ui.canvas}>
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onConnect={onConnect}
-              onNodeClick={(_, n) => {
-                setSelectedId(n.id);
-                setSelectedEdgeId(null);
-              }}
-              onEdgeClick={(_, e) => {
-                setSelectedEdgeId(e.id);
-                setSelectedId(null);
-              }}
-              nodeTypes={nodeTypes}
-              fitView
-            >
-              <Background color={ui.bgDot} gap={20} size={1} />
-              <Controls />
-              <MiniMap
-                className={light ? "!bg-white !border-slate-200" : undefined}
-                maskColor={light ? "rgb(148 163 184 / 0.15)" : undefined}
+            <ReactFlowProvider>
+              <WorkflowFlowCanvas
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                onNodeClick={(id) => {
+                  setSelectedId(id);
+                  setSelectedEdgeId(null);
+                }}
+                onEdgeClick={(id) => {
+                  setSelectedEdgeId(id);
+                  setSelectedId(null);
+                }}
+                onPlaceNode={placeNode}
+                bgDot={ui.bgDot}
+                light={light}
               />
-            </ReactFlow>
+            </ReactFlowProvider>
           </div>
 
           <div className="w-full lg:w-[min(420px,38vw)] shrink-0 space-y-3 max-h-[calc(100vh-10rem)] overflow-y-auto">
@@ -699,11 +924,18 @@ export const WorkflowStudioView: React.FC = () => {
 
             {selectedData?.wfType === "agent" && (
               <WorkflowAgentEditorPanel
+                key={selectedId ?? "agent-panel"}
                 agentId={selectedData.agentId || null}
                 publishedAgents={publishedAgents}
                 allAgents={agents.map((a) => ({ id: a.id, name: a.name }))}
                 canCreate={canCreateAgent}
-                onAgentLinked={(id) => updateSelected({ agentId: id })}
+                onAgentLinked={(id, agent) =>
+                  updateSelected({
+                    agentId: id,
+                    agentName: agent?.name,
+                    label: agent?.name ?? selectedData?.label,
+                  })
+                }
               />
             )}
 

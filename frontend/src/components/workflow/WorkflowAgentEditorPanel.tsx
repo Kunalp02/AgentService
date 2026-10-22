@@ -8,7 +8,10 @@ type Props = {
   agentId: string | null;
   publishedAgents: { id: string; name: string }[];
   allAgents: { id: string; name: string }[];
-  onAgentLinked: (agentId: string, agent?: AgentUi) => void;
+  onAgentLinked: (
+    agentId: string,
+    agent?: AgentUi | { id: string; name: string },
+  ) => void;
   canCreate: boolean;
 };
 
@@ -70,7 +73,9 @@ export const WorkflowAgentEditorPanel: React.FC<Props> = ({
               const id = e.target.value;
               if (id) {
                 setPanelMode("edit");
-                onAgentLinked(id);
+                const name =
+                  allAgents.find((a) => a.id === id)?.name ?? undefined;
+                onAgentLinked(id, name ? { id, name } : undefined);
               }
             }}
           >
