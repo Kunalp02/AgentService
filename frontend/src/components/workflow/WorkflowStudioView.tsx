@@ -24,6 +24,8 @@ import {
   Diamond,
   Circle,
   Square,
+  Sun,
+  Moon,
 } from "lucide-react";
 import { usePlatform } from "../../context/PlatformContext";
 import { workflowsApi } from "../../api/workflows";
@@ -113,7 +115,74 @@ function nodeLabel(n: WorkflowNode): string {
   return n.type;
 }
 
+function workflowUi(light: boolean) {
+  return {
+    title: light ? "text-slate-900" : "text-white",
+    subtitle: light ? "text-slate-600" : "text-slate-400",
+    subtitleStrong: light ? "text-slate-700" : "text-slate-300",
+    panel:
+      light
+        ? "rounded-xl border border-slate-200 bg-white shadow-sm"
+        : "rounded-xl border border-slate-800 bg-slate-900/80",
+    panelTitle: light ? "text-sm font-semibold text-slate-900" : "text-sm font-semibold text-white",
+    listBtn:
+      light
+        ? "w-full flex justify-between items-center px-3 py-2 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-xs text-left transition-colors"
+        : "w-full flex justify-between items-center px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-left",
+    listBtnTitle: light ? "text-slate-900 font-medium" : "text-white font-medium",
+    listBtnMeta: light ? "text-slate-500" : "text-slate-400",
+    templateBtn:
+      light
+        ? "w-full text-left px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 text-xs text-slate-800 transition-colors"
+        : "w-full text-left px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-white",
+    dashedBtn:
+      light
+        ? "flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-slate-300 text-xs text-slate-600 hover:bg-slate-50"
+        : "flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-slate-600 text-xs text-slate-300",
+    input:
+      light
+        ? "w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-400"
+        : "w-full bg-slate-800 rounded-lg px-2 py-1.5 text-xs text-white",
+    field:
+      light
+        ? "w-full bg-white border border-slate-200 rounded p-1.5 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-400"
+        : "w-full bg-slate-800 rounded p-1.5 text-xs text-white",
+    sidebarBtn:
+      light
+        ? "w-full text-xs px-2 py-1.5 rounded bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-800 transition-colors"
+        : "w-full text-xs px-2 py-1.5 rounded bg-slate-800 text-white",
+    sidebarBtnDisabled:
+      light
+        ? "w-full text-xs px-2 py-1.5 rounded bg-slate-50 text-slate-400 border border-slate-200"
+        : "w-full text-xs px-2 py-1.5 rounded bg-slate-900 text-slate-500 border border-slate-700",
+    label: light ? "text-[10px] text-slate-500 uppercase font-semibold" : "text-[10px] text-slate-500 uppercase font-semibold",
+    fieldLabel: light ? "text-[10px] text-slate-500" : "text-[10px] text-slate-400",
+    hint: light ? "text-[10px] text-slate-500" : "text-[10px] text-slate-500",
+    hintCode: light ? "text-slate-700" : "text-slate-500",
+    supervisorHint: light ? "text-[10px] text-sky-800" : "text-[10px] text-cyan-200/80",
+    supervisorCode: light ? "text-sky-700" : "text-cyan-300",
+    canvas:
+      light
+        ? "flex-1 min-h-[480px] rounded-xl border border-slate-200 overflow-hidden bg-slate-50 shadow-inner [&_.react-flow__controls-button]:bg-white [&_.react-flow__controls-button]:border-slate-200 [&_.react-flow__controls-button]:fill-slate-600 [&_.react-flow__controls-button:hover]:bg-slate-100"
+        : "flex-1 min-h-[480px] rounded-xl border border-slate-800 overflow-hidden bg-slate-950",
+    error:
+      light
+        ? "text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-3"
+        : "text-xs text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3",
+    themeToggle:
+      light
+        ? "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 shadow-sm transition-colors"
+        : "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-600 bg-slate-800 text-slate-200 hover:bg-slate-700 transition-colors",
+    runMeta: light ? "text-[10px] text-slate-600 max-h-48 overflow-y-auto space-y-1" : "text-[10px] text-slate-300 max-h-48 overflow-y-auto space-y-1",
+    runOk: light ? "text-emerald-700" : "text-emerald-300",
+    runStepBorder: light ? "border-t border-slate-200 pt-1" : "border-t border-slate-700 pt-1",
+    bgDot: light ? "#cbd5e1" : undefined,
+  };
+}
+
 const WfNode: React.FC<{ data: FlowData }> = ({ data }) => {
+  const { theme } = usePlatform();
+  const light = theme === "light";
   const icon =
     data.wfType === "start" ? (
       <Circle className="h-3 w-3 text-emerald-400" />
@@ -129,16 +198,30 @@ const WfNode: React.FC<{ data: FlowData }> = ({ data }) => {
       <Bot className="h-3 w-3 text-sky-400" />
     );
   return (
-    <div className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 min-w-[120px] shadow-lg">
-      <div className="flex items-center gap-2 text-xs font-semibold text-white">
+    <div
+      className={
+        light
+          ? "rounded-lg border border-slate-300 bg-white px-3 py-2 min-w-[120px] shadow-md"
+          : "rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 min-w-[120px] shadow-lg"
+      }
+    >
+      <div
+        className={`flex items-center gap-2 text-xs font-semibold ${light ? "text-slate-800" : "text-white"}`}
+      >
         {icon}
         <span>{data.label}</span>
       </div>
       {data.agentId && (
-        <div className="mt-1 truncate text-[10px] text-slate-400">{data.agentId}</div>
+        <div
+          className={`mt-1 truncate text-[10px] ${light ? "text-slate-500" : "text-slate-400"}`}
+        >
+          {data.agentId}
+        </div>
       )}
       {data.wfType === "human" && (
-        <div className="mt-1 text-[9px] text-violet-300">Preview only</div>
+        <div className={`mt-1 text-[9px] ${light ? "text-violet-600" : "text-violet-300"}`}>
+          Preview only
+        </div>
       )}
     </div>
   );
@@ -167,7 +250,9 @@ function validateDefinition(def: WorkflowDefinition): string[] {
 }
 
 export const WorkflowStudioView: React.FC = () => {
-  const { agents } = usePlatform();
+  const { agents, theme, setTheme } = usePlatform();
+  const light = theme === "light";
+  const ui = workflowUi(light);
   const publishedAgents = useMemo(
     () =>
       agents.filter((a) => String(a.status).toLowerCase() === "published"),
@@ -360,44 +445,71 @@ export const WorkflowStudioView: React.FC = () => {
 
   const inBuilder = nodes.length > 0;
 
+  const toggleTheme = () => {
+    setTheme(light ? "dark" : "light");
+  };
+
   return (
-    <div className="p-6 space-y-4 max-w-[1600px] mx-auto">
-      <div>
-        <h1 className="text-2xl font-bold text-white">Agent workflows</h1>
-        <p className="text-xs text-slate-400 mt-1 max-w-3xl">
-          Design multi-agent flows using <strong className="text-slate-300">published</strong> agents
-          from Agent Studio. The supervisor is a normal agent (routing prompt only); specialists
-          hold KB/tools. Wire them on the canvas — not as tools on the supervisor record.
-        </p>
+    <div
+      className={`p-6 space-y-4 max-w-[1600px] mx-auto ${light ? "text-slate-800" : ""}`}
+    >
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div>
+          <h1 className={`text-2xl font-bold tracking-tight ${ui.title}`}>
+            Agent workflows
+          </h1>
+          <p className={`text-xs mt-1 max-w-3xl ${ui.subtitle}`}>
+            Design multi-agent flows using{" "}
+            <strong className={ui.subtitleStrong}>published</strong> agents from
+            Agent Studio. The supervisor is a normal agent (routing prompt only);
+            specialists hold KB/tools. Wire them on the canvas — not as tools on
+            the supervisor record.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={toggleTheme}
+          className={ui.themeToggle}
+          title={light ? "Switch to dark mode" : "Switch to light mode"}
+          aria-pressed={light}
+        >
+          {light ? (
+            <>
+              <Moon className="h-3.5 w-3.5" aria-hidden />
+              Dark
+            </>
+          ) : (
+            <>
+              <Sun className="h-3.5 w-3.5" aria-hidden />
+              Light
+            </>
+          )}
+        </button>
       </div>
 
-      {error && (
-        <div className="text-xs text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
-          {error}
-        </div>
-      )}
+      {error && <div className={ui.error}>{error}</div>}
 
       {!inBuilder ? (
         <div className="grid md:grid-cols-2 gap-4">
-          <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-4 space-y-3">
-            <h2 className="text-sm font-semibold text-white">New workflow</h2>
+          <div className={`${ui.panel} p-4 space-y-3`}>
+            <h2 className={ui.panelTitle}>New workflow</h2>
             <button
               type="button"
-              className="w-full text-left px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-white"
+              className={ui.templateBtn}
               onClick={() => openNew(supervisorSqlTemplate(), "SQL supervisor workflow")}
             >
               Supervisor pattern (SQL: route → generator → executor)
             </button>
             <button
               type="button"
-              className="w-full text-left px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-white"
+              className={ui.templateBtn}
               onClick={() => openNew(linearPipelineTemplate(), "Linear pipeline")}
             >
               Linear pipeline (A → B)
             </button>
             <button
               type="button"
-              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-slate-600 text-xs text-slate-300"
+              className={ui.dashedBtn}
               onClick={() =>
                 openNew(
                   { nodes: [{ id: "start", type: "start", position: { x: 0, y: 0 } }, { id: "end", type: "end", position: { x: 300, y: 0 } }], edges: [{ from: "start", to: "end" }] },
@@ -408,23 +520,23 @@ export const WorkflowStudioView: React.FC = () => {
               <Plus className="h-3 w-3" /> Blank canvas
             </button>
           </div>
-          <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-4">
-            <h2 className="text-sm font-semibold text-white mb-3">Saved workflows</h2>
+          <div className={`${ui.panel} p-4`}>
+            <h2 className={`${ui.panelTitle} mb-3`}>Saved workflows</h2>
             {loading ? (
-              <p className="text-xs text-slate-500">Loading…</p>
+              <p className={`text-xs ${ui.subtitle}`}>Loading…</p>
             ) : workflows.length === 0 ? (
-              <p className="text-xs text-slate-500">No workflows yet.</p>
+              <p className={`text-xs ${ui.subtitle}`}>No workflows yet.</p>
             ) : (
               <ul className="space-y-2 max-h-64 overflow-y-auto">
                 {workflows.map((w) => (
                   <li key={w.workflowId}>
                     <button
                       type="button"
-                      className="w-full flex justify-between items-center px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-left"
+                      className={ui.listBtn}
                       onClick={() => void openWorkflow(w.workflowId)}
                     >
-                      <span className="text-white font-medium">{w.name}</span>
-                      <span className="text-slate-400">{w.status}</span>
+                      <span className={ui.listBtnTitle}>{w.name}</span>
+                      <span className={ui.listBtnMeta}>{w.status}</span>
                     </button>
                   </li>
                 ))}
@@ -436,29 +548,29 @@ export const WorkflowStudioView: React.FC = () => {
         <div className="flex flex-col lg:flex-row gap-4 min-h-[640px]">
           <div className="w-full lg:w-48 shrink-0 space-y-2">
             <input
-              className="w-full bg-slate-800 rounded-lg px-2 py-1.5 text-xs text-white"
+              className={ui.input}
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Workflow name"
             />
-            <p className="text-[10px] text-slate-500 uppercase font-semibold">Add node</p>
-            <button type="button" className="w-full text-xs px-2 py-1.5 rounded bg-slate-800 text-white" onClick={() => addNode("agent", "supervisor")}>
+            <p className={ui.label}>Add node</p>
+            <button type="button" className={ui.sidebarBtn} onClick={() => addNode("agent", "supervisor")}>
               Supervisor agent
             </button>
-            <button type="button" className="w-full text-xs px-2 py-1.5 rounded bg-slate-800 text-white" onClick={() => addNode("agent", "specialist")}>
+            <button type="button" className={ui.sidebarBtn} onClick={() => addNode("agent", "specialist")}>
               Specialist agent
             </button>
-            <button type="button" className="w-full text-xs px-2 py-1.5 rounded bg-slate-800 text-white" onClick={() => addNode("condition")}>
+            <button type="button" className={ui.sidebarBtn} onClick={() => addNode("condition")}>
               Route / condition
             </button>
-            <button type="button" className="w-full text-xs px-2 py-1.5 rounded bg-slate-800 text-white" onClick={() => addNode("end")}>
+            <button type="button" className={ui.sidebarBtn} onClick={() => addNode("end")}>
               End
             </button>
             <button
               type="button"
               disabled
               title="Human-in-the-loop: runtime will pause for approval in a future release"
-              className="w-full text-xs px-2 py-1.5 rounded bg-slate-900 text-slate-500 border border-slate-700"
+              className={ui.sidebarBtnDisabled}
               onClick={() => addNode("human")}
             >
               Human approval (soon)
@@ -470,11 +582,15 @@ export const WorkflowStudioView: React.FC = () => {
               <button type="button" disabled={busy || !doc} onClick={() => void publish()} className="flex items-center justify-center gap-1 text-xs py-2 rounded bg-emerald-700 text-white">
                 <Upload className="h-3 w-3" /> Publish
               </button>
-              {doc && <span className="text-[10px] text-slate-500 text-center">Status: {doc.status}</span>}
+              {doc && (
+                <span className={`text-[10px] text-center ${ui.subtitle}`}>
+                  Status: {doc.status}
+                </span>
+              )}
             </div>
           </div>
 
-          <div className="flex-1 min-h-[480px] rounded-xl border border-slate-800 overflow-hidden bg-slate-950">
+          <div className={ui.canvas}>
             <ReactFlow
               nodes={nodes}
               edges={edges}
@@ -492,21 +608,26 @@ export const WorkflowStudioView: React.FC = () => {
               nodeTypes={nodeTypes}
               fitView
             >
-              <Background />
+              <Background color={ui.bgDot} gap={20} size={1} />
               <Controls />
-              <MiniMap />
+              <MiniMap
+                className={light ? "!bg-white !border-slate-200" : undefined}
+                maskColor={light ? "rgb(148 163 184 / 0.15)" : undefined}
+              />
             </ReactFlow>
           </div>
 
           <div className="w-full lg:w-72 shrink-0 space-y-3">
-            <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-3 space-y-2">
-              <h3 className="text-xs font-semibold text-white">Properties</h3>
+            <div className={`${ui.panel} p-3 space-y-2`}>
+              <h3 className={`text-xs font-semibold ${ui.title}`}>Properties</h3>
               {selectedEdge ? (
                 <>
-                  <p className="text-[10px] text-slate-400">Edge {selectedEdge.source} → {selectedEdge.target}</p>
-                  <label className="text-[10px] text-slate-400">when (route label)</label>
+                  <p className={ui.fieldLabel}>
+                    Edge {selectedEdge.source} → {selectedEdge.target}
+                  </p>
+                  <label className={ui.fieldLabel}>when (route label)</label>
                   <input
-                    className="w-full bg-slate-800 rounded p-1.5 text-xs text-white"
+                    className={ui.field}
                     value={String((selectedEdge.data as { when?: string })?.when ?? selectedEdge.label ?? "")}
                     onChange={(e) => {
                       const v = e.target.value;
@@ -522,12 +643,14 @@ export const WorkflowStudioView: React.FC = () => {
                   />
                 </>
               ) : !selectedData ? (
-                <p className="text-[11px] text-slate-500">Select a node or edge on the canvas.</p>
+                <p className={`text-[11px] ${ui.hint}`}>
+                  Select a node or edge on the canvas.
+                </p>
               ) : selectedData.wfType === "agent" ? (
                 <>
-                  <label className="text-[10px] text-slate-400">Published agent</label>
+                  <label className={ui.fieldLabel}>Published agent</label>
                   <select
-                    className="w-full bg-slate-800 rounded p-1.5 text-xs text-white"
+                    className={ui.field}
                     value={selectedData.agentId || ""}
                     onChange={(e) => updateSelected({ agentId: e.target.value })}
                   >
@@ -538,54 +661,57 @@ export const WorkflowStudioView: React.FC = () => {
                       </option>
                     ))}
                   </select>
-                  <label className="text-[10px] text-slate-400">Input template</label>
+                  <label className={ui.fieldLabel}>Input template</label>
                   <textarea
-                    className="w-full bg-slate-800 rounded p-1.5 text-xs text-white h-20"
+                    className={`${ui.field} h-20`}
                     value={selectedData.input || ""}
                     onChange={(e) => updateSelected({ input: e.target.value })}
                   />
-                  <label className="text-[10px] text-slate-400">Output state key</label>
+                  <label className={ui.fieldLabel}>Output state key</label>
                   <input
-                    className="w-full bg-slate-800 rounded p-1.5 text-xs text-white"
+                    className={ui.field}
                     value={selectedData.output || ""}
                     onChange={(e) => updateSelected({ output: e.target.value })}
                   />
                   {selectedData.role === "supervisor" && (
-                    <p className="text-[10px] text-cyan-200/80">
-                      Prompt this agent to emit <code className="text-cyan-300">ROUTE: generate</code> (or match your edge labels).
+                    <p className={ui.supervisorHint}>
+                      Prompt this agent to emit{" "}
+                      <code className={ui.supervisorCode}>ROUTE: generate</code> (or match
+                      your edge labels).
                     </p>
                   )}
                 </>
               ) : selectedData.wfType === "condition" ? (
                 <>
-                  <label className="text-[10px] text-slate-400">Read state key (on)</label>
+                  <label className={ui.fieldLabel}>Read state key (on)</label>
                   <input
-                    className="w-full bg-slate-800 rounded p-1.5 text-xs text-white"
+                    className={ui.field}
                     value={selectedData.on || ""}
                     onChange={(e) => updateSelected({ on: e.target.value })}
                   />
-                  <p className="text-[10px] text-slate-500">
-                    Edge labels are matched as <code>when</code> (e.g. generate, otherwise).
+                  <p className={ui.hint}>
+                    Edge labels are matched as <code className={ui.hintCode}>when</code> (e.g.
+                    generate, otherwise).
                   </p>
                 </>
               ) : (
-                <p className="text-[11px] text-slate-500">No properties for this node type.</p>
+                <p className={`text-[11px] ${ui.hint}`}>No properties for this node type.</p>
               )}
             </div>
 
-            <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-3 space-y-2">
-              <h3 className="text-xs font-semibold text-white flex items-center gap-1">
+            <div className={`${ui.panel} p-3 space-y-2`}>
+              <h3 className={`text-xs font-semibold flex items-center gap-1 ${ui.title}`}>
                 <Play className="h-3 w-3" /> Test run
               </h3>
               <textarea
-                className="w-full bg-slate-800 rounded p-2 text-xs text-white h-16"
+                className={`${ui.field} h-16 p-2`}
                 value={testInput}
                 onChange={(e) => setTestInput(e.target.value)}
               />
-              <label className="text-[10px] text-slate-400">maxSteps</label>
+              <label className={ui.fieldLabel}>maxSteps</label>
               <input
                 type="number"
-                className="w-full bg-slate-800 rounded p-1.5 text-xs text-white"
+                className={ui.field}
                 value={maxSteps}
                 onChange={(e) => setMaxSteps(Number(e.target.value) || 30)}
               />
@@ -593,16 +719,16 @@ export const WorkflowStudioView: React.FC = () => {
                 type="button"
                 disabled={busy}
                 onClick={() => void runTest()}
-                className="w-full py-2 rounded bg-indigo-600 text-xs text-white font-semibold"
+                className="w-full py-2 rounded bg-indigo-600 hover:bg-indigo-500 text-xs text-white font-semibold transition-colors disabled:opacity-50"
               >
                 Run published workflow
               </button>
               {runResult && (
-                <div className="text-[10px] text-slate-300 max-h-48 overflow-y-auto space-y-1">
-                  <div className="text-emerald-300">Status: {runResult.status}</div>
+                <div className={ui.runMeta}>
+                  <div className={ui.runOk}>Status: {runResult.status}</div>
                   <div className="whitespace-pre-wrap">{runResult.output}</div>
                   {runResult.steps.map((s, i) => (
-                    <div key={i} className="border-t border-slate-700 pt-1">
+                    <div key={i} className={ui.runStepBorder}>
                       {s.nodeId} ({s.type}) — {s.status}
                     </div>
                   ))}
