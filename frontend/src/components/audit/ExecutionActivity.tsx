@@ -1,23 +1,45 @@
 import React, { useEffect, useState } from "react";
 import { Activity } from "lucide-react";
 import { usePlatform } from "../../context/PlatformContext";
-import { ActivityRun, executionApi } from "../../api/execution";
+import {
+  auditApi,
+  AuditRunDetail,
+  AuditRunItem,
+} from "../../api/execution";
+
+const RECENT_LIMIT = 20;
+
+type ActivityRow = AuditRunItem & { agentName: string };
 
 export const ExecutionActivity: React.FC = () => {
   const { agents, theme } = usePlatform();
-  const [rows, setRows] = useState<ActivityRun[]>([]);
+  const [rows, setRows] = useState<ActivityRow[]>([]);
   const [error, setError] = useState("");
-  const [selected, setSelected] = useState<ActivityRun | null>(null);
+  const [selected, setSelected] = useState<AuditRunDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   useEffect(() => {
     let stop = false;
     const load = async () => {
       try {
-        const next = await executionApi.loadActivity(
-          agents.map((agent) => ({ id: agent.id, name: agent.name })),
+        const lists = await Promise.all(
+          agents.map(async (agent) => {
+            const page = await auditApi
+              .list(agent.id, {}, RECENT_LIMIT, 0)
+              .catch(() => ({ items: [] as AuditRunItem[] }));
+            return page.items.map((item) => ({
+              ...item,
+              agentName: agent.name,
+            }));
+          }),
+        );
+        const next = lists.flat().sort(
+          (a, b) =>
+            new Date(b.createdAt || 0).getTime() -
+            new Date(a.createdAt || 0).getTime(),
         );
         if (!stop) {
-          setRows(next);
+          setRows(next.slice(0, 50));
           setError("");
         }
       } catch (err) {
@@ -27,7 +49,7 @@ export const ExecutionActivity: React.FC = () => {
           );
       }
     };
-        let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const loop = async () => {
       await load();
       if (!stop) timer = setTimeout(loop, 10000);
@@ -38,6 +60,21 @@ export const ExecutionActivity: React.FC = () => {
       if (timer) clearTimeout(timer);
     };
   }, [agents]);
+
+  const openRow = async (row: ActivityRow) => {
+    setDetailLoading(true);
+    setSelected(null);
+    try {
+      const detail = await auditApi.get(row.agentId, row.runId);
+      setSelected(detail);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Could not load run details.",
+      );
+    } finally {
+      setDetailLoading(false);
+    }
+  };
 
   const light = theme === "light";
 
@@ -67,7 +104,7 @@ export const ExecutionActivity: React.FC = () => {
               <tr
                 key={row.runId}
                 className="cursor-pointer border-t border-slate-800/40"
-                onClick={() => setSelected(row)}
+                onClick={() => void openRow(row)}
               >
                 <td className="p-2 whitespace-nowrap">
                   {row.createdAt
@@ -79,11 +116,10 @@ export const ExecutionActivity: React.FC = () => {
                   {row.status}
                   {row.executionType ? ` · ${row.executionType}` : ""}
                 </td>
-                <td className="p-2">
-                  {row.startedBy}
-                  {row.clientIp ? ` · ${row.clientIp}` : ""}
+                <td className="p-2">{row.triggeredBy}</td>
+                <td className="p-2 truncate max-w-[240px]">
+                  {row.inputPreview}
                 </td>
-                <td className="p-2 truncate max-w-[240px]">{row.input}</td>
               </tr>
             ))}
           </tbody>
@@ -92,7 +128,10 @@ export const ExecutionActivity: React.FC = () => {
           <p className="text-xs text-slate-500 p-2">No executions yet.</p>
         )}
       </div>
-      {selected && (
+      {detailLoading && (
+        <p className="text-xs text-slate-500">Loading run details…</p>
+      )}
+      {selected && !detailLoading && (
         <div className="text-xs space-y-1 border-t border-slate-800 pt-2">
           <div>Run {selected.runId}</div>
           <div>Thread {selected.threadId}</div>
@@ -106,6 +145,3 @@ export const ExecutionActivity: React.FC = () => {
     </div>
   );
 };
-
-
-
