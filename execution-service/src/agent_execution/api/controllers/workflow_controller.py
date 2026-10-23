@@ -13,6 +13,7 @@ from agent_execution.api.dependencies import (
 )
 from agent_execution.schemas.workflows import (
     WorkflowDocument,
+    WorkflowResumeRequest,
     WorkflowRunRequest,
     WorkflowRunResponse,
     WorkflowSummary,
@@ -55,6 +56,16 @@ class WorkflowController(ApiController):
             response_model=WorkflowRunResponse,
             tags=["workflows"],
         )(self.run)
+        router.get(
+            "/workflows/{workflow_id}/runs/{run_id}",
+            response_model=WorkflowRunResponse,
+            tags=["workflows"],
+        )(self.get_run)
+        router.post(
+            "/workflows/{workflow_id}/runs/{run_id}/resume",
+            response_model=WorkflowRunResponse,
+            tags=["workflows"],
+        )(self.resume)
 
     async def create(
         self,
@@ -114,6 +125,27 @@ class WorkflowController(ApiController):
     ) -> WorkflowRunResponse:
         triggered_by = principal.username or principal.user_id or principal.subject
         return await service.run(workflow_id, body, token, triggered_by)
+
+    async def get_run(
+        self,
+        workflow_id: UUID,
+        run_id: UUID,
+        service: Annotated[WorkflowService, Depends(get_workflow_service)],
+        _: Annotated[str, Depends(get_bearer_token)],
+    ) -> WorkflowRunResponse:
+        return await service.get_run(workflow_id, run_id)
+
+    async def resume(
+        self,
+        workflow_id: UUID,
+        run_id: UUID,
+        body: WorkflowResumeRequest,
+        service: Annotated[WorkflowService, Depends(get_workflow_service)],
+        token: Annotated[str, Depends(get_bearer_token)],
+        principal: Annotated[PlatformPrincipal, Depends(get_platform_principal)],
+    ) -> WorkflowRunResponse:
+        triggered_by = principal.username or principal.user_id or principal.subject
+        return await service.resume(workflow_id, run_id, body, token, triggered_by)
 
 
 

@@ -18,12 +18,20 @@ The workflow only stores **references** (`agentId`) and **templates** (`{{input}
 
 Supervisor output should include routable text (e.g. `ROUTE: generate`) matched by **Route** node edges (`when`).
 
-## Human-in-the-loop (planned)
+## Patterns the engine runs
 
-Industry pattern: workflow run enters `WAITING`, UI prompts user, `POST .../runs/{id}/resume` continues.
+| Canvas | Runtime |
+|--------|---------|
+| One outgoing line per agent | Pipeline (A → B → C) |
+| Several outgoing lines + `when` | Orchestrator. Reply with `{"next":"node-id"}` or `ROUTE: node-id`. Workers can point back to the supervisor. |
+| Route / condition | Rule branch on a state key (`when`, `contains …`, `otherwise`) |
+| Parallel → agents + Join | Those agents run together, then the join continues |
+| Human approval | Run status `PAUSED`. `POST /workflows/{id}/runs/{runId}/resume` with `{ "input": "..." }` |
+| Sub-workflow | Node type `workflow` with a published `workflowId` |
 
-- Builder shows **Human approval (soon)** — not saved to API yet.
-- Next backend step: `human` node type + paused run state + resume endpoint.
+## Human-in-the-loop
+
+A **Human approval** node pauses the run. The test panel shows **Resume paused run**. The reply is stored in the node’s output key, then the single outgoing line continues. Put human nodes on the parent workflow, not inside a sub-workflow.
 
 ## Test a workflow
 

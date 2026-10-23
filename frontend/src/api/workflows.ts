@@ -69,9 +69,11 @@ function mapDocument(raw: any): WorkflowDocument {
         id: n.id,
         type: n.type,
         agentId: n.agentId ?? n.agent_id,
+        workflowId: n.workflowId ?? n.workflow_id,
         input: n.input,
         output: n.output,
         on: n.on,
+        role: n.role,
         position: n.position,
       })),
       edges: (def.edges ?? []).map((e: any) => ({
@@ -84,22 +86,15 @@ function mapDocument(raw: any): WorkflowDocument {
   };
 }
 
-/** API accepts start | agent | condition | end only */
 function toApiDefinition(def: WorkflowDefinition) {
-  const humanIds = new Set(
-    def.nodes.filter((n) => n.type === "human").map((n) => n.id),
-  );
-  if (humanIds.size > 0) {
-    throw new Error(
-      "Remove Human-in-the-loop nodes before save (runtime support coming next).",
-    );
-  }
   return {
     maxSteps: def.maxSteps ?? 30,
     nodes: def.nodes.map((n) => ({
       id: n.id,
       type: n.type,
       agentId: n.agentId,
+      workflowId: n.workflowId,
+      role: n.role,
       input: n.input,
       output: n.output,
       on: n.on,
@@ -153,4 +148,10 @@ export const workflowsApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  resume: (id: string, runId: string, input: string) =>
+    workflowFetch<WorkflowRunResponse>(
+      `/workflows/${id}/runs/${encodeURIComponent(runId)}/resume`,
+      { method: "POST", body: JSON.stringify({ input }) },
+    ),
 };

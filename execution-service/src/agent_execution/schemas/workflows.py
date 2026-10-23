@@ -11,8 +11,19 @@ class WorkflowNode(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     id: str
-    type: Literal["start", "agent", "condition", "end"]
+    type: Literal[
+        "start",
+        "agent",
+        "condition",
+        "end",
+        "parallel",
+        "join",
+        "human",
+        "workflow",
+    ]
     agent_id: UUID | None = Field(default=None, alias="agentId")
+    workflow_id: UUID | None = Field(default=None, alias="workflowId")
+    role: Literal["supervisor", "specialist", "default"] | None = None
     input: str = "{{input}}"
     output: str = ""
     on: str = ""
@@ -64,6 +75,12 @@ class WorkflowRunRequest(BaseModel):
     session_id: str | None = Field(default=None, alias="sessionId")
     user_id: str | None = Field(default=None, alias="userId")
     org_id: str | None = Field(default=None, alias="orgId")
+
+
+class WorkflowResumeRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    input: str = "approved"
 
 
 class WorkflowStepTrace(BaseModel):

@@ -3,17 +3,20 @@ export type WorkflowNodeType =
   | "end"
   | "agent"
   | "condition"
-  | "human";
+  | "human"
+  | "parallel"
+  | "join"
+  | "workflow";
 
 export interface WorkflowNode {
   id: string;
   type: WorkflowNodeType;
   agentId?: string;
+  workflowId?: string;
   input?: string;
   output?: string;
   on?: string;
   position?: { x: number; y: number };
-  /** UI-only hint (supervisor vs specialist); not required by API */
   role?: "supervisor" | "specialist" | "default";
 }
 

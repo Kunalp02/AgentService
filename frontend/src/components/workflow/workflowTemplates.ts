@@ -51,6 +51,106 @@ export function supervisorSqlTemplate(): WorkflowDefinition {
   };
 }
 
+/**
+ * Supervisor hub: workers connect back to the supervisor.
+ * Supervisor output must be JSON `{"next":"generator"|"executor"|"finish"}`
+ * or a line `ROUTE: generator`.
+ */
+export function supervisorHubTemplate(): WorkflowDefinition {
+  return {
+    maxSteps: 30,
+    nodes: [
+      { id: "start", type: "start", position: { x: 80, y: 240 } },
+      {
+        id: "supervisor",
+        type: "agent",
+        role: "supervisor",
+        input: "{{input}}\n\nLast result:\n{{result}}",
+        output: "decision",
+        position: { x: 300, y: 220 },
+      },
+      {
+        id: "generator",
+        type: "agent",
+        role: "specialist",
+        input: "User question:\n{{input}}\n\nWrite SQL only.",
+        output: "sql",
+        position: { x: 560, y: 80 },
+      },
+      {
+        id: "executor",
+        type: "agent",
+        role: "specialist",
+        input: "Execute this SQL and return the rows:\n{{sql}}",
+        output: "result",
+        position: { x: 560, y: 240 },
+      },
+      {
+        id: "gate",
+        type: "human",
+        input: "Approve running this SQL?\n{{sql}}",
+        output: "human",
+        position: { x: 560, y: 400 },
+      },
+      { id: "end", type: "end", position: { x: 860, y: 220 } },
+    ],
+    edges: [
+      { from: "start", to: "supervisor" },
+      { from: "supervisor", to: "generator", when: "generator" },
+      { from: "supervisor", to: "executor", when: "executor" },
+      { from: "supervisor", to: "gate", when: "approve" },
+      { from: "supervisor", to: "end", when: "finish" },
+      { from: "generator", to: "supervisor" },
+      { from: "executor", to: "supervisor" },
+      { from: "gate", to: "supervisor" },
+    ],
+  };
+}
+
+export function parallelFanInTemplate(): WorkflowDefinition {
+  return {
+    maxSteps: 20,
+    nodes: [
+      { id: "start", type: "start", position: { x: 40, y: 180 } },
+      { id: "split", type: "parallel", position: { x: 220, y: 180 } },
+      {
+        id: "left",
+        type: "agent",
+        role: "specialist",
+        input: "{{input}}",
+        output: "left_out",
+        position: { x: 440, y: 80 },
+      },
+      {
+        id: "right",
+        type: "agent",
+        role: "specialist",
+        input: "{{input}}",
+        output: "right_out",
+        position: { x: 440, y: 280 },
+      },
+      { id: "join", type: "join", position: { x: 680, y: 180 } },
+      {
+        id: "synth",
+        type: "agent",
+        role: "specialist",
+        input: "Combine:\nA={{left_out}}\nB={{right_out}}",
+        output: "output",
+        position: { x: 880, y: 180 },
+      },
+      { id: "end", type: "end", position: { x: 1100, y: 180 } },
+    ],
+    edges: [
+      { from: "start", to: "split" },
+      { from: "split", to: "left" },
+      { from: "split", to: "right" },
+      { from: "split", to: "join" },
+      { from: "join", to: "synth" },
+      { from: "synth", to: "end" },
+    ],
+  };
+}
+
 export function linearPipelineTemplate(): WorkflowDefinition {
   return {
     maxSteps: 20,

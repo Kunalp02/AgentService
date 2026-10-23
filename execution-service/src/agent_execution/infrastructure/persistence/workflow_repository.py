@@ -102,6 +102,14 @@ class WorkflowRepository:
                 org_id,
             )
 
+    async def get_run(self, workflow_run_id: UUID):
+        pool = await self._database.pool()
+        async with pool.acquire() as conn:
+            return await conn.fetchrow(
+                "SELECT * FROM workflow_runs WHERE workflow_run_id = $1",
+                workflow_run_id,
+            )
+
     async def finish_run(
         self,
         workflow_run_id: UUID,

@@ -137,6 +137,107 @@ def test_render_leaves_unknown_tokens_empty():
     assert render_template("{{input}}\n{{missing}}", {"input": "hi"}) == "hi\n"
 
 
+@pytest.mark.asyncio
+async def test_orchestrator_routes_by_json_next_and_loops_back():
+    supervisor = uuid4()
+    worker = uuid4()
+    seen = {"n": 0}
+
+    async def run_agent(agent_id, text: str) -> str:
+        if agent_id == supervisor:
+            seen["n"] += 1
+            if seen["n"] == 1:
+                return '{"next":"worker"}'
+            return '{"next":"finish"}'
+        return "done"
+
+    definition = WorkflowDefinition(
+        nodes=[
+            WorkflowNode(id="start", type="start"),
+            _agent("supervisor", supervisor, "decision"),
+            _agent("worker", worker, "result", "task {{input}}"),
+            WorkflowNode(id="end", type="end"),
+        ],
+        edges=[
+            WorkflowEdge(**{"from": "start", "to": "supervisor"}),
+            WorkflowEdge(**{"from": "supervisor", "to": "worker", "when": "worker"}),
+            WorkflowEdge(**{"from": "worker", "to": "supervisor"}),
+            WorkflowEdge(**{"from": "supervisor", "to": "end", "when": "finish"}),
+        ],
+    )
+    outcome = await execute_workflow(definition, "question", run_agent)
+    assert outcome.output == "done"
+    assert seen["n"] == 2
+    assert outcome.state["result"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_parallel_join_runs_both_agents():
+    left = uuid4()
+    right = uuid4()
+    calls: list = []
+
+    async def run_agent(agent_id, text: str) -> str:
+        calls.append(agent_id)
+        return "L" if agent_id == left else "R"
+
+    definition = WorkflowDefinition(
+        nodes=[
+            WorkflowNode(id="start", type="start"),
+            WorkflowNode(id="split", type="parallel"),
+            _agent("left", left, "left_out"),
+            _agent("right", right, "right_out"),
+            WorkflowNode(id="join", type="join"),
+            _agent("tail", uuid4(), "output", "{{left_out}}-{{right_out}}"),
+            WorkflowNode(id="end", type="end"),
+        ],
+        edges=[
+            WorkflowEdge(**{"from": "start", "to": "split"}),
+            WorkflowEdge(**{"from": "split", "to": "left"}),
+            WorkflowEdge(**{"from": "split", "to": "right"}),
+            WorkflowEdge(**{"from": "split", "to": "join"}),
+            WorkflowEdge(**{"from": "join", "to": "tail"}),
+            WorkflowEdge(**{"from": "tail", "to": "end"}),
+        ],
+    )
+    # tail agent id is nodes[5]
+    tail_id = definition.nodes[5].agent_id
+
+    async def run_agent_fixed(agent_id, text: str) -> str:
+        if agent_id == tail_id:
+            return text
+        return await run_agent(agent_id, text)
+
+    outcome = await execute_workflow(definition, "q", run_agent_fixed)
+    assert set(calls) == {left, right}
+    assert outcome.output == "L-R"
+
+
+@pytest.mark.asyncio
+async def test_human_node_pauses():
+    from agent_execution.services.workflow_engine import WorkflowPaused
+
+    definition = WorkflowDefinition(
+        nodes=[
+            WorkflowNode(id="start", type="start"),
+            WorkflowNode(id="gate", type="human", input="Approve {{input}}?", output="human"),
+            WorkflowNode(id="end", type="end"),
+        ],
+        edges=[
+            WorkflowEdge(**{"from": "start", "to": "gate"}),
+            WorkflowEdge(**{"from": "gate", "to": "end"}),
+        ],
+    )
+
+    async def run_agent(agent_id, text: str) -> str:
+        return ""
+
+    with pytest.raises(WorkflowPaused) as caught:
+        await execute_workflow(definition, "drop table", run_agent)
+    assert caught.value.node_id == "gate"
+    assert "drop table" in caught.value.message
+
+
 def test_publish_validation_requires_an_agent():
     definition = WorkflowDefinition(
         nodes=[

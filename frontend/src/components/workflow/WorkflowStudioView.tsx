@@ -43,6 +43,8 @@ import type {
 } from "../../types/workflow";
 import {
   linearPipelineTemplate,
+  parallelFanInTemplate,
+  supervisorHubTemplate,
   supervisorSqlTemplate,
 } from "./workflowTemplates";
 
@@ -55,6 +57,7 @@ type FlowData = {
   output?: string;
   on?: string;
   role?: WorkflowNode["role"];
+  workflowId?: string;
 };
 
 const WF_DND = "application/x-workflow-dnd";
@@ -89,8 +92,22 @@ function buildFlowData(
     role,
     agentId: agent?.id,
     agentName: agent?.name,
-    input: wfType === "agent" ? "{{input}}" : undefined,
-    output: wfType === "agent" ? "output" : undefined,
+    input:
+      wfType === "agent"
+        ? "{{input}}"
+        : wfType === "human"
+          ? "Approve this step?\n{{input}}"
+          : wfType === "workflow"
+            ? "{{input}}"
+            : undefined,
+    output:
+      wfType === "agent"
+        ? "output"
+        : wfType === "human"
+          ? "human"
+          : wfType === "workflow"
+            ? "output"
+            : undefined,
     on: wfType === "condition" ? "supervisor_out" : undefined,
   };
 }
@@ -108,6 +125,7 @@ function definitionToFlow(def: WorkflowDefinition): { nodes: Node[]; edges: Edge
       output: n.output,
       on: n.on,
       role: n.role,
+      workflowId: n.workflowId,
     } satisfies FlowData,
   }));
   const edges: Edge[] = def.edges.map((e, i) => ({
@@ -138,6 +156,7 @@ function flowToDefinition(
         output: d.output,
         on: d.on,
         role: d.role,
+        workflowId: d.workflowId,
         position: { x: n.position.x, y: n.position.y },
       };
     }),
@@ -155,6 +174,9 @@ function nodeLabel(n: WorkflowNode): string {
   if (n.type === "end") return "End";
   if (n.type === "condition") return "Route";
   if (n.type === "human") return "Human approval";
+  if (n.type === "parallel") return "Parallel";
+  if (n.type === "join") return "Join";
+  if (n.type === "workflow") return "Sub-workflow";
   if (n.role === "supervisor") return "Supervisor";
   if (n.type === "agent") return "Agent";
   return n.type;
@@ -383,12 +405,12 @@ function validateDefinition(def: WorkflowDefinition): string[] {
   const ends = def.nodes.filter((n) => n.type === "end");
   if (starts.length !== 1) errors.push("Exactly one Start node is required.");
   if (ends.length < 1) errors.push("At least one End node is required.");
-  if (def.nodes.some((n) => n.type === "human")) {
-    errors.push("Human-in-the-loop nodes are not saved yet (coming soon).");
-  }
   for (const n of def.nodes) {
     if (n.type === "agent" && !n.agentId) {
       errors.push(`Agent node "${n.id}" needs a published agent selected.`);
+    }
+    if (n.type === "workflow" && !n.workflowId) {
+      errors.push(`Sub-workflow "${n.id}" needs a workflow id.`);
     }
     if (n.type === "condition" && !n.on?.trim()) {
       errors.push(`Route node "${n.id}" needs a state key (on).`);
@@ -419,6 +441,7 @@ export const WorkflowStudioView: React.FC = () => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [testInput, setTestInput] = useState("Show top 10 rows from sales");
+  const [resumeNote, setResumeNote] = useState("approved");
   const [runResult, setRunResult] = useState<WorkflowRunResponse | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -600,6 +623,24 @@ export const WorkflowStudioView: React.FC = () => {
     }
   };
 
+  const resumeRun = async () => {
+    if (!doc || !runResult?.workflowRunId) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await workflowsApi.resume(
+        doc.workflowId,
+        runResult.workflowRunId,
+        resumeNote,
+      );
+      setRunResult(result);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Resume failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const inBuilder = nodes.length > 0;
 
   const toggleTheme = () => {
@@ -656,6 +697,20 @@ export const WorkflowStudioView: React.FC = () => {
               onClick={() => openNew(supervisorSqlTemplate(), "SQL supervisor workflow")}
             >
               Supervisor pattern (SQL: route → generator → executor)
+            </button>
+            <button
+              type="button"
+              className={ui.templateBtn}
+              onClick={() => openNew(supervisorHubTemplate(), "Supervisor hub")}
+            >
+              Supervisor hub (workers return to supervisor)
+            </button>
+            <button
+              type="button"
+              className={ui.templateBtn}
+              onClick={() => openNew(parallelFanInTemplate(), "Parallel fan-in")}
+            >
+              Parallel fan-out then join
             </button>
             <button
               type="button"
@@ -798,15 +853,44 @@ export const WorkflowStudioView: React.FC = () => {
                 </ul>
               </>
             )}
-            <button
-              type="button"
-              disabled
-              title="Human-in-the-loop: runtime will pause for approval in a future release"
-              className={ui.sidebarBtnDisabled}
-              onClick={() => addNode("human")}
+            <div
+              draggable
+              onDragStart={(e) =>
+                startDrag(e, { kind: "palette", wfType: "parallel" })
+              }
+              onClick={() => addNode("parallel")}
+              className={`${ui.sidebarBtn} cursor-grab active:cursor-grabbing`}
             >
-              Human approval (soon)
-            </button>
+              Parallel
+            </div>
+            <div
+              draggable
+              onDragStart={(e) => startDrag(e, { kind: "palette", wfType: "join" })}
+              onClick={() => addNode("join")}
+              className={`${ui.sidebarBtn} cursor-grab active:cursor-grabbing`}
+            >
+              Join
+            </div>
+            <div
+              draggable
+              onDragStart={(e) =>
+                startDrag(e, { kind: "palette", wfType: "human" })
+              }
+              onClick={() => addNode("human")}
+              className={`${ui.sidebarBtn} cursor-grab active:cursor-grabbing`}
+            >
+              Human approval
+            </div>
+            <div
+              draggable
+              onDragStart={(e) =>
+                startDrag(e, { kind: "palette", wfType: "workflow" })
+              }
+              onClick={() => addNode("workflow")}
+              className={`${ui.sidebarBtn} cursor-grab active:cursor-grabbing`}
+            >
+              Sub-workflow
+            </div>
             <div className="pt-2 flex flex-col gap-2">
               <button type="button" disabled={busy} onClick={() => void save()} className="flex items-center justify-center gap-1 text-xs py-2 rounded bg-cyan-600 text-white font-semibold">
                 <Save className="h-3 w-3" /> Save
@@ -898,12 +982,67 @@ export const WorkflowStudioView: React.FC = () => {
                   />
                   {selectedData.role === "supervisor" && (
                     <p className={ui.supervisorHint}>
-                      Prompt this agent to emit{" "}
-                      <code className={ui.supervisorCode}>ROUTE: generate</code> (or match
-                      your edge labels).
+                      With several outgoing lines, this agent is the orchestrator.
+                      Return JSON{" "}
+                      <code className={ui.supervisorCode}>
+                        {`{"next":"worker-id"}`}
+                      </code>{" "}
+                      or <code className={ui.supervisorCode}>ROUTE: worker-id</code>.
+                      Edge <code className={ui.supervisorCode}>when</code> must match
+                      that value. One outgoing line stays a plain pipeline step.
                     </p>
                   )}
                 </>
+              ) : selectedData.wfType === "human" ? (
+                <>
+                  <label className={ui.fieldLabel}>Prompt shown at pause</label>
+                  <textarea
+                    className={`${ui.field} h-20`}
+                    value={selectedData.input || ""}
+                    onChange={(e) => updateSelected({ input: e.target.value })}
+                  />
+                  <label className={ui.fieldLabel}>State key for the reply</label>
+                  <input
+                    className={ui.field}
+                    value={selectedData.output || ""}
+                    onChange={(e) => updateSelected({ output: e.target.value })}
+                  />
+                  <p className={ui.hint}>
+                    The run pauses here. Resume writes the reply into this key and
+                    follows the single outgoing line.
+                  </p>
+                </>
+              ) : selectedData.wfType === "workflow" ? (
+                <>
+                  <label className={ui.fieldLabel}>Published workflow id</label>
+                  <input
+                    className={ui.field}
+                    value={selectedData.workflowId || ""}
+                    onChange={(e) => updateSelected({ workflowId: e.target.value })}
+                    placeholder="workflow uuid"
+                  />
+                  <label className={ui.fieldLabel}>Input template</label>
+                  <textarea
+                    className={`${ui.field} h-16`}
+                    value={selectedData.input || ""}
+                    onChange={(e) => updateSelected({ input: e.target.value })}
+                  />
+                  <label className={ui.fieldLabel}>Output state key</label>
+                  <input
+                    className={ui.field}
+                    value={selectedData.output || ""}
+                    onChange={(e) => updateSelected({ output: e.target.value })}
+                  />
+                </>
+              ) : selectedData.wfType === "parallel" ? (
+                <p className={ui.hint}>
+                  Draw one line to each agent branch and one line to a Join node.
+                  Those agents run together, then the join continues.
+                </p>
+              ) : selectedData.wfType === "join" ? (
+                <p className={ui.hint}>
+                  Merge point after parallel. One outgoing line to the next step.
+                </p>
               ) : selectedData.wfType === "condition" ? (
                 <>
                   <label className={ui.fieldLabel}>Read state key (on)</label>
@@ -966,12 +1105,31 @@ export const WorkflowStudioView: React.FC = () => {
               {runResult && (
                 <div className={ui.runMeta}>
                   <div className={ui.runOk}>Status: {runResult.status}</div>
+                  {runResult.error && <div>{runResult.error}</div>}
                   <div className="whitespace-pre-wrap">{runResult.output}</div>
                   {runResult.steps.map((s, i) => (
                     <div key={i} className={ui.runStepBorder}>
                       {s.nodeId} ({s.type}) — {s.status}
                     </div>
                   ))}
+                </div>
+              )}
+              {runResult?.status === "PAUSED" && (
+                <div className="space-y-2">
+                  <label className={ui.fieldLabel}>Resume reply</label>
+                  <textarea
+                    className={`${ui.field} h-16`}
+                    value={resumeNote}
+                    onChange={(e) => setResumeNote(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void resumeRun()}
+                    className="w-full py-2 rounded bg-amber-600 text-xs text-white font-semibold"
+                  >
+                    Resume paused run
+                  </button>
                 </div>
               )}
             </div>
