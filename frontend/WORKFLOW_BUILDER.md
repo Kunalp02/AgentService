@@ -1,5 +1,10 @@
 # Workflow builder — supervisor & HITL
 
+## Sidebar visibility
+
+**Agent Workflows** appears under *Intelligence & Testing* when the signed-in user has **Agent View** (`200`) or **WorkFlow View** (`38`). If the menu is missing, grant one of those on the role profile and sign in again.
+
+
 ## Supervisor vs specialist agents
 
 | | Supervisor agent | Specialist agents (generator, executor, …) |

@@ -134,7 +134,7 @@ export const Sidebar: React.FC = () => {
           id: "workflows",
           label: "Agent Workflows",
           icon: FolderGit2,
-          permission: PERMISSIONS.WorkFlow.View,
+          permission: PERMISSIONS.Agent.View,
         },
       ],
     },

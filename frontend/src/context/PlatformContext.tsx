@@ -337,6 +337,12 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
           hasPermission(PERMISSIONS.Group.View)
         );
       }
+      if (view === "workflows") {
+        return (
+          hasPermission(PERMISSIONS.WorkFlow.View) ||
+          hasPermission(PERMISSIONS.Agent.View)
+        );
+      }
       const p = requiredPermissionForView(view);
       return p ? hasPermission(p) : false;
     },
@@ -469,6 +475,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
       } else if (
         view === "agents" ||
         view === "playground" ||
+        view === "workflows" ||
         view === "audit"
       ) {
         if (hasPermission(PERMISSIONS.Agent.View)) {
