@@ -308,7 +308,7 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
         case "playground":
           return PERMISSIONS.Agent.View;
         case "workflows":
-          return PERMISSIONS.WorkFlow.View;
+          return PERMISSIONS.Agent.View;
         case "model-registry":
           return PERMISSIONS.ModelRegistry.View;
         case "audit":
@@ -335,12 +335,6 @@ export const PlatformProvider: React.FC<{ children: React.ReactNode }> = ({
           hasPermission(PERMISSIONS.Users.View) &&
           hasPermission(PERMISSIONS.RoleProfile.View) &&
           hasPermission(PERMISSIONS.Group.View)
-        );
-      }
-      if (view === "workflows") {
-        return (
-          hasPermission(PERMISSIONS.WorkFlow.View) ||
-          hasPermission(PERMISSIONS.Agent.View)
         );
       }
       const p = requiredPermissionForView(view);
