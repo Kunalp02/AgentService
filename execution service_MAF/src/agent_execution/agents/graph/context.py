@@ -1,0 +1,75 @@
+from __future__ import annotations
+import httpx
+
+from dataclasses import dataclass
+
+from agent_execution.infrastructure.auth.service_token_provider import (
+    ServiceAuthTokenProvider,
+)
+from agent_execution.infrastructure.conversation_store.base import (
+    ConversationHistoryStore,
+)
+from agent_execution.infrastructure.llm_gateway import BifrostLlmGateway
+from agent_execution.infrastructure.platform.platform_clients import PlatformClients
+from agent_execution.services.context_manager import ContextManager
+from agent_execution.services.conversation_memory_service import (
+    ConversationMemoryService,
+)
+from agent_execution.services.manifest_service import ManifestService, RagContextService
+from agent_execution.services.storage_client import StorageClient
+from agent_execution.services.mcp_client_cache import McpClientCache
+from agent_execution.services.tool_execution_service import ToolExecutionService
+from agent_execution.settings import Settings
+from agent_execution.infrastructure.platform.local_tools_client import LocalToolsClient
+
+
+@dataclass(frozen=True, slots=True)
+class AgentGraphContext:
+    settings: Settings
+    manifest_service: ManifestService
+    context_manager: ContextManager
+    memory_service: ConversationMemoryService
+    conversation_store: ConversationHistoryStore
+    rag_service: RagContextService
+    llm_gateway: BifrostLlmGateway
+    tool_service: ToolExecutionService
+    mcp_client_cache: McpClientCache
+    storage: StorageClient
+
+    @classmethod
+    def create(
+        cls,
+        settings: Settings,
+        platform: PlatformClients,
+        conversation_store: ConversationHistoryStore,
+        storage: StorageClient,
+        # token_provider: ServiceAuthTokenProvider | None = None,
+        token_provider=None,
+        *,
+        local_tools_http: httpx.AsyncClient,
+    ) -> AgentGraphContext:
+        mcp_cache = McpClientCache(settings)
+        local_client = LocalToolsClient(local_tools_http, settings)
+        return cls(
+            settings=settings,
+            manifest_service=ManifestService(settings, platform),
+            context_manager=ContextManager(settings),
+            memory_service=ConversationMemoryService(settings, conversation_store),
+            conversation_store=conversation_store,
+            rag_service=RagContextService(platform),
+            llm_gateway=BifrostLlmGateway(settings, token_provider),
+            mcp_client_cache=mcp_cache,
+            # tool_service=ToolExecutionService(platform, settings, mcp_cache),
+            tool_service=ToolExecutionService(
+                platform, settings, mcp_cache, local_client
+            ),
+            storage=storage,
+        )
+
+    async def aclose(self) -> None:
+        await self.memory_service.aclose()
+        await self.llm_gateway.aclose()
+        await self.mcp_client_cache.aclose()
+
+
+
